@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw } from "lucide-react";
+import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight } from "lucide-react";
 
 const T = {
   paper: "#F8F4EA",
@@ -91,6 +91,7 @@ export default function CarnetNotes() {
   const [grades, setGrades] = useState({});
   const [className, setClassName] = useState("");
   const [activeTab, setActiveTab] = useState("eleves");
+  const [studentIndex, setStudentIndex] = useState(0);
   const [search, setSearch] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
@@ -352,6 +353,9 @@ export default function CarnetNotes() {
               <TabButton active={activeTab === "eleves"} onClick={() => setActiveTab("eleves")} icon={<Users size={15} />}>
                 Élèves
               </TabButton>
+              <TabButton active={activeTab === "parEleve"} onClick={() => setActiveTab("parEleve")} icon={<ClipboardList size={15} />}>
+                Par élève
+              </TabButton>
               {subjects.map((s) => (
                 <TabButton key={s.key} active={activeTab === s.key} onClick={() => setActiveTab(s.key)} icon={<PenLine size={15} />}>
                   {s.label}
@@ -393,6 +397,17 @@ export default function CarnetNotes() {
 
             {activeTab === "eleves" && (
               <ElevesTab roster={filteredRoster} rankByMatricule={rankByMatricule} onRemove={removeStudent} newStudent={newStudent} setNewStudent={setNewStudent} onAdd={addStudent} />
+            )}
+
+            {activeTab === "parEleve" && (
+              <StudentEntryTab
+                roster={roster}
+                subjects={subjects}
+                grades={grades}
+                onChangeCode={updateGradeCode}
+                currentIndex={studentIndex}
+                setCurrentIndex={setStudentIndex}
+              />
             )}
 
             {activeSubject && (
@@ -484,6 +499,134 @@ function ImportScreen({ onFile, fileInputRef }) {
   );
 }
 
+function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex, setCurrentIndex }) {
+  const safeIndex = Math.min(Math.max(currentIndex, 0), Math.max(roster.length - 1, 0));
+  const student = roster[safeIndex];
+  const inputRefs = useRef([]);
+
+  useEffect(() => {
+    if (currentIndex !== safeIndex) setCurrentIndex(safeIndex);
+  }, [safeIndex, currentIndex, setCurrentIndex]);
+
+  useEffect(() => {
+    const t = setTimeout(() => inputRefs.current[0]?.focus(), 30);
+    return () => clearTimeout(t);
+  }, [safeIndex]);
+
+  if (!student) {
+    return (
+      <div className="rounded-xl p-8 text-center text-sm" style={{ background: T.card, border: `1px solid ${T.line}`, color: T.inkSoft }}>
+        Aucun élève à afficher.
+      </div>
+    );
+  }
+
+  const handleCodeChange = (subjIdx, subjectKey, digits) => {
+    onChangeCode(student.matricule, subjectKey, digits);
+    if (digits.length === 4) {
+      if (subjIdx < subjects.length - 1) {
+        setTimeout(() => inputRefs.current[subjIdx + 1]?.focus(), 10);
+      } else if (safeIndex < roster.length - 1) {
+        setTimeout(() => setCurrentIndex(safeIndex + 1), 250);
+      }
+    }
+  };
+
+  const completedCount = subjects.filter((s) => {
+    const g = grades[student.matricule]?.[s.key];
+    return g && g.obtenue !== "" && g.obtenue !== undefined;
+  }).length;
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+      <div
+        className="px-4 py-3 flex items-center justify-between gap-2"
+        style={{ background: T.ink, color: "#FFFFFF" }}
+      >
+        <button
+          onClick={() => safeIndex > 0 && setCurrentIndex(safeIndex - 1)}
+          disabled={safeIndex === 0}
+          className="p-1.5 rounded-full disabled:opacity-30"
+          style={{ background: "rgba(255,255,255,0.1)" }}
+        >
+          <ChevronLeft size={18} />
+        </button>
+        <div className="text-center">
+          <div className="text-xs" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
+            Élève {safeIndex + 1} / {roster.length} · {completedCount}/{subjects.length} matières
+          </div>
+          <div style={{ fontFamily: "'Fraunces', serif" }} className="font-semibold">
+            {student.nom} {student.prenoms}
+          </div>
+        </div>
+        <button
+          onClick={() => safeIndex < roster.length - 1 && setCurrentIndex(safeIndex + 1)}
+          disabled={safeIndex === roster.length - 1}
+          className="p-1.5 rounded-full disabled:opacity-30"
+          style={{ background: "rgba(255,255,255,0.1)" }}
+        >
+          <ChevronRight size={18} />
+        </button>
+      </div>
+
+      <select
+        value={safeIndex}
+        onChange={(e) => setCurrentIndex(Number(e.target.value))}
+        className="w-full px-4 py-2 text-sm border-b outline-none"
+        style={{ borderColor: T.line, color: T.inkSoft }}
+      >
+        {roster.map((s, i) => (
+          <option key={s.matricule} value={i}>
+            {i + 1}. {s.nom} {s.prenoms}
+          </option>
+        ))}
+      </select>
+
+      <div className="divide-y" style={{ borderColor: T.line }}>
+        {subjects.map((s, idx) => {
+          const g = grades[student.matricule]?.[s.key] || { obtenue: "", perfectionnement: "", rawCode: "" };
+          const displayCode = g.rawCode !== undefined && g.rawCode !== "" ? g.rawCode : codeFromValues(g.obtenue, g.perfectionnement);
+          const hasAny = g.obtenue !== "" && g.obtenue !== undefined;
+          const total = hasAny ? (toNum(g.obtenue) || 0) + (toNum(g.perfectionnement) || 0) : null;
+          const color = total === null ? T.inkSoft : total >= 10 ? T.green : T.red;
+          return (
+            <div key={s.key} className="p-4" style={{ borderColor: T.line }}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium">{s.label}</span>
+                {hasAny && (
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold" style={{ color: T.green }}>
+                    <Check size={14} /> Fait
+                  </span>
+                )}
+              </div>
+              <input
+                ref={(el) => (inputRefs.current[idx] = el)}
+                type="text"
+                inputMode="numeric"
+                maxLength={4}
+                placeholder="Saisir 4 chiffres (ex: 1402)"
+                value={displayCode}
+                onChange={(e) => handleCodeChange(idx, s.key, e.target.value.replace(/\D/g, "").slice(0, 4))}
+                className="w-full text-center py-3 rounded-lg text-2xl font-semibold"
+                style={{
+                  border: `2px solid ${hasAny ? T.green : T.goldLine}`,
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  letterSpacing: "0.2em",
+                }}
+              />
+              {hasAny && (
+                <div className="text-center text-xs mt-1.5" style={{ color, fontFamily: "'IBM Plex Mono', monospace" }}>
+                  Note {g.obtenue} + Perf. {g.perfectionnement} = <strong>{total}/20</strong>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStudent, onAdd }) {
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
@@ -556,11 +699,21 @@ function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStuden
 }
 
 function SubjectTab({ roster, subject, grades, onChangeCode }) {
+  const inputRefs = useRef([]);
+
+  const handleChange = (i, matricule, digits) => {
+    onChangeCode(matricule, subject.key, digits);
+    if (digits.length === 4 && i < roster.length - 1) {
+      setTimeout(() => inputRefs.current[i + 1]?.focus(), 10);
+    }
+  };
+
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
       <div className="px-4 py-2.5 text-xs" style={{ background: T.greenSoft, color: T.green, borderBottom: `1px solid ${T.line}` }}>
         Saisis <strong>4 chiffres</strong> : les 2 premiers = note obtenue, les 2 derniers = perfectionnement.
-        Exemple : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>1202</span> → 12 + 02 = <strong>14</strong>
+        Exemple : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>1202</span> → 12 + 02 = <strong>14</strong>.
+        Le champ suivant se sélectionne automatiquement.
       </div>
       <table className="w-full text-sm">
         <thead>
@@ -586,12 +739,13 @@ function SubjectTab({ roster, subject, grades, onChangeCode }) {
                 </td>
                 <td className="px-2 py-2">
                   <input
+                    ref={(el) => (inputRefs.current[i] = el)}
                     type="text"
                     inputMode="numeric"
                     maxLength={4}
                     placeholder="0000"
                     value={displayCode}
-                    onChange={(e) => onChangeCode(s.matricule, subject.key, e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    onChange={(e) => handleChange(i, s.matricule, e.target.value.replace(/\D/g, "").slice(0, 4))}
                     className="w-24 mx-auto block text-center px-2 py-1.5 rounded-md text-base font-semibold"
                     style={{ border: `1px solid ${T.line}`, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.15em" }}
                   />
