@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight } from "lucide-react";
+import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight, Moon, Sun, Lock, Unlock, Layers, Share2, BarChart3, AlertTriangle, UserX, UserCheck, Undo2, Plus, X } from "lucide-react";
 
-const T = {
+const LIGHT_THEME = {
   paper: "#F3FBF7",
   ink: "#0B4A3A",
   inkSoft: "#5B7A70",
@@ -17,10 +17,37 @@ const T = {
   line: "#D8ECE4",
 };
 
+const DARK_THEME = {
+  paper: "#0E1B16",
+  ink: "#EAF7F1",
+  inkSoft: "#9BB5AC",
+  gold: "#2FBE8B",
+  goldSoft: "#1B3229",
+  goldLine: "#294B3E",
+  green: "#3ECF98",
+  greenSoft: "#153328",
+  red: "#E17A72",
+  redSoft: "#3A2220",
+  card: "#152420",
+  line: "#25392F",
+};
+
+// Mutated in place so every component reading T.xxx picks up the active
+// theme's colors as soon as the app re-renders (triggered by the dark-mode toggle).
+const T = { ...LIGHT_THEME };
+function applyTheme(mode) {
+  Object.assign(T, mode === "dark" ? DARK_THEME : LIGHT_THEME);
+}
+
 const FONT_LINK = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap";
 
-const STORAGE_KEY = "carnet-notes:current";
+const CLASSES_KEY = "carnet-notes:classes";
+const ACTIVE_KEY = "carnet-notes:activeId";
+const LEGACY_KEY = "carnet-notes:current";
+const PIN_KEY = "carnet-notes:pin";
+const DARK_KEY = "carnet-notes:dark";
 const PASSING_AVERAGE = 9; // moyenne générale minimale pour passer en classe supérieure
+const SUBJECT_PASS = 10; // seuil de réussite par matière (sur 20)
 
 function codeFromValues(obtenue, perfectionnement) {
   const oNum = toNum(obtenue);
@@ -31,20 +58,68 @@ function codeFromValues(obtenue, perfectionnement) {
   return o + p;
 }
 
+const CODE_SEPARATORS = [":", ";", "'"];
+
 function parseCode(code) {
-  if (!code || code.length < 3) return { obtenue: "", perfectionnement: "" };
+  if (!code) return { obtenue: "", perfectionnement: "" };
+  const sep = CODE_SEPARATORS.find((s) => code.includes(s));
+  if (sep) {
+    const [left, right] = code.split(sep);
+    if (!left || left.length < 2 || !right || right.length < 1) return { obtenue: "", perfectionnement: "" };
+    return {
+      obtenue: String(parseInt(left.slice(0, 2), 10)),
+      perfectionnement: String(Math.min(2, parseInt(right[0], 10) || 0)),
+    };
+  }
+  if (code.length < 3) return { obtenue: "", perfectionnement: "" };
   return {
     obtenue: String(parseInt(code.slice(0, 2), 10)),
     perfectionnement: String(Math.min(2, parseInt(code.slice(2, 3), 10) || 0)),
   };
 }
 
-function sanitizeCode(value) {
-  let digits = value.replace(/\D/g, "").slice(0, 3);
-  if (digits.length === 3 && !["0", "1", "2"].includes(digits[2])) {
-    digits = digits.slice(0, 2);
+// A code is "complete" once it has 2 digits + perfectionnement digit,
+// with or without a separator (12:2 or 122 both work).
+function isCodeComplete(code) {
+  if (!code) return false;
+  const sep = CODE_SEPARATORS.find((s) => code.includes(s));
+  if (sep) {
+    const [left, right] = code.split(sep);
+    return !!left && left.length === 2 && !!right && right.length === 1;
   }
-  return digits;
+  return code.length === 3;
+}
+
+// Lets the person type digits freely, plus at most one separator (: ; ')
+// right after the 2-digit "note obtenue", followed by a single 0/1/2 digit.
+function sanitizeCode(value) {
+  let out = "";
+  let digitsBefore = 0;
+  let sepUsed = false;
+  let digitsAfter = 0;
+  for (const ch of value) {
+    if (/[0-9]/.test(ch)) {
+      if (!sepUsed) {
+        if (digitsBefore < 2) {
+          out += ch;
+          digitsBefore++;
+        }
+      } else if (digitsAfter < 1 && ["0", "1", "2"].includes(ch)) {
+        out += ch;
+        digitsAfter++;
+      }
+    } else if (CODE_SEPARATORS.includes(ch)) {
+      if (!sepUsed && digitsBefore === 2) {
+        out += ch;
+        sepUsed = true;
+      }
+    }
+  }
+  // Fallback for the no-separator style: 3rd digit must be 0/1/2
+  if (!sepUsed && out.length === 3 && !["0", "1", "2"].includes(out[2])) {
+    out = out.slice(0, 2);
+  }
+  return out;
 }
 
 function cleanMatricule(v) {
@@ -58,8 +133,9 @@ function toNum(v) {
   return isNaN(n) ? null : n;
 }
 
-function computeRanking(roster, subjects, grades) {
+function computeRanking(roster, subjects, grades, attendance = {}) {
   const list = roster.map((stu) => {
+    const absent = attendance[stu.matricule] === false;
     let sum = 0;
     let count = 0;
     subjects.forEach((s) => {
@@ -71,8 +147,8 @@ function computeRanking(roster, subjects, grades) {
         count += 1;
       }
     });
-    const moyenne = count > 0 ? sum / count : null;
-    return { ...stu, moyenne, count };
+    const moyenne = !absent && count > 0 ? sum / count : null;
+    return { ...stu, moyenne, count, absent };
   });
 
   const withMoy = list.filter((s) => s.moyenne !== null).sort((a, b) => b.moyenne - a.moyenne);
@@ -97,6 +173,7 @@ export default function CarnetNotes() {
   const [roster, setRoster] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [grades, setGrades] = useState({});
+  const [attendance, setAttendance] = useState({}); // matricule -> false means absent (absence of key = present)
   const [className, setClassName] = useState("");
   const [activeTab, setActiveTab] = useState("parEleve");
   const [studentIndex, setStudentIndex] = useState(0);
@@ -105,20 +182,74 @@ export default function CarnetNotes() {
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
   const [newStudent, setNewStudent] = useState({ matricule: "", nom: "", prenoms: "" });
+
+  const [classesList, setClassesList] = useState([]); // catalog of all saved classes (metadata + snapshot)
+  const [activeId, setActiveId] = useState(null);
+  const [showClassSwitcher, setShowClassSwitcher] = useState(false);
+
+  const [darkMode, setDarkMode] = useState(() => {
+    const dark = typeof window !== "undefined" && localStorage.getItem(DARK_KEY) === "1";
+    applyTheme(dark ? "dark" : "light");
+    return dark;
+  });
+  const [, forceThemeRerender] = useState(0);
+
+  const [pinSet, setPinSet] = useState(() => typeof window !== "undefined" && !!localStorage.getItem(PIN_KEY));
+  const [locked, setLocked] = useState(() => typeof window !== "undefined" && !!localStorage.getItem(PIN_KEY));
+
   const fileInputRef = useRef(null);
   const saveTimer = useRef(null);
+  const undoStack = useRef([]);
+  const [canUndo, setCanUndo] = useState(false);
 
-  // Load persisted data once (stored locally in this browser)
+  // Load persisted data once (stored locally in this browser), migrating any
+  // older single-class save into the new multi-class catalog.
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        setRoster(parsed.roster || []);
-        setSubjects(parsed.subjects || []);
-        setGrades(parsed.grades || {});
-        setClassName(parsed.className || "");
-        if (parsed.roster && parsed.roster.length > 0) setActiveTab("parEleve");
+      const dark = localStorage.getItem(DARK_KEY) === "1";
+      setDarkMode(dark);
+      applyTheme(dark ? "dark" : "light");
+
+      const pin = localStorage.getItem(PIN_KEY);
+      setPinSet(!!pin);
+      setLocked(!!pin);
+
+      let list = [];
+      const rawClasses = localStorage.getItem(CLASSES_KEY);
+      if (rawClasses) list = JSON.parse(rawClasses);
+
+      if (list.length === 0) {
+        const legacyRaw = localStorage.getItem(LEGACY_KEY);
+        if (legacyRaw) {
+          const legacy = JSON.parse(legacyRaw);
+          if (legacy.roster && legacy.roster.length > 0) {
+            list = [
+              {
+                id: "legacy",
+                className: legacy.className || "",
+                roster: legacy.roster || [],
+                subjects: legacy.subjects || [],
+                grades: legacy.grades || {},
+                attendance: {},
+                updatedAt: Date.now(),
+              },
+            ];
+          }
+        }
+      }
+
+      setClassesList(list);
+      const savedActiveId = localStorage.getItem(ACTIVE_KEY);
+      const active = list.find((c) => c.id === savedActiveId) || list[0];
+      if (active) {
+        setActiveId(active.id);
+        setRoster(active.roster || []);
+        setSubjects(active.subjects || []);
+        setGrades(active.grades || {});
+        setAttendance(active.attendance || {});
+        setClassName(active.className || "");
+        setActiveTab("parEleve");
+        setShowWelcome(false);
       }
     } catch (e) {
       // no saved data yet
@@ -126,27 +257,111 @@ export default function CarnetNotes() {
     setLoaded(true);
   }, []);
 
-  // Autosave (debounced)
+  // Autosave (debounced): keeps the active class's data in sync inside the
+  // multi-class catalog stored in localStorage.
   useEffect(() => {
     if (!loaded) return;
-    if (roster.length === 0) return;
+    if (roster.length === 0 || !activeId) return;
     setSaveState("saving");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       try {
-        localStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({ roster, subjects, grades, className })
-        );
+        setClassesList((prev) => {
+          const others = prev.filter((c) => c.id !== activeId);
+          const updated = [
+            ...others,
+            { id: activeId, className, roster, subjects, grades, attendance, updatedAt: Date.now() },
+          ];
+          localStorage.setItem(CLASSES_KEY, JSON.stringify(updated));
+          localStorage.setItem(ACTIVE_KEY, activeId);
+          return updated;
+        });
         setSaveState("saved");
       } catch (e) {
         setSaveState("idle");
       }
     }, 700);
     return () => clearTimeout(saveTimer.current);
-  }, [roster, subjects, grades, className, loaded]);
+  }, [roster, subjects, grades, attendance, className, activeId, loaded]);
 
-  const ranking = useMemo(() => computeRanking(roster, subjects, grades), [roster, subjects, grades]);
+  const toggleDarkMode = () => {
+    setDarkMode((prev) => {
+      const next = !prev;
+      applyTheme(next ? "dark" : "light");
+      localStorage.setItem(DARK_KEY, next ? "1" : "0");
+      forceThemeRerender((n) => n + 1);
+      return next;
+    });
+  };
+
+  const startNewClass = () => {
+    const id = `cls_${Date.now()}`;
+    setActiveId(id);
+    setRoster([]);
+    setSubjects([]);
+    setGrades({});
+    setAttendance({});
+    setClassName("");
+    setActiveTab("parEleve");
+    setStudentIndex(0);
+    setShowWelcome(false);
+    setShowClassSwitcher(false);
+    undoStack.current = [];
+    setCanUndo(false);
+  };
+
+  const switchToClass = (id) => {
+    const rec = classesList.find((c) => c.id === id);
+    if (!rec) return;
+    setActiveId(id);
+    setRoster(rec.roster || []);
+    setSubjects(rec.subjects || []);
+    setGrades(rec.grades || {});
+    setAttendance(rec.attendance || {});
+    setClassName(rec.className || "");
+    setActiveTab("parEleve");
+    setStudentIndex(0);
+    setShowClassSwitcher(false);
+    undoStack.current = [];
+    setCanUndo(false);
+  };
+
+  const deleteClass = (id) => {
+    if (!window.confirm("Supprimer définitivement cette classe et toutes ses notes ?")) return;
+    const remaining = classesList.filter((c) => c.id !== id);
+    localStorage.setItem(CLASSES_KEY, JSON.stringify(remaining));
+    setClassesList(remaining);
+    if (id === activeId) {
+      if (remaining.length > 0) {
+        switchToClass(remaining[0].id);
+      } else {
+        setActiveId(null);
+        setRoster([]);
+        setSubjects([]);
+        setGrades({});
+        setAttendance({});
+        setClassName("");
+        localStorage.removeItem(ACTIVE_KEY);
+      }
+    }
+  };
+
+  const pushUndo = (prevGrades) => {
+    undoStack.current.push(JSON.parse(JSON.stringify(prevGrades)));
+    if (undoStack.current.length > 20) undoStack.current.shift();
+    setCanUndo(true);
+  };
+
+  const handleUndo = () => {
+    const last = undoStack.current.pop();
+    if (last) {
+      setGrades(last);
+      setCanUndo(undoStack.current.length > 0);
+      if (navigator.vibrate) navigator.vibrate(20);
+    }
+  };
+
+  const ranking = useMemo(() => computeRanking(roster, subjects, grades, attendance), [roster, subjects, grades, attendance]);
   const rankByMatricule = useMemo(() => {
     const m = {};
     ranking.forEach((r) => (m[r.matricule] = r));
@@ -204,6 +419,7 @@ export default function CarnetNotes() {
         setGrades(newGrades);
         setClassName(guessedClassName || "");
         setActiveTab("parEleve");
+        setActiveId((prev) => prev || `cls_${Date.now()}`);
       } catch (err) {
         alert("Impossible de lire ce fichier. Vérifie qu'il s'agit bien d'un export EducMaster (.xlsx).");
       }
@@ -211,27 +427,24 @@ export default function CarnetNotes() {
     reader.readAsArrayBuffer(file);
   }, []);
 
-  const updateGrade = (matricule, subjectKey, field, value) => {
-    setGrades((prev) => ({
-      ...prev,
-      [matricule]: {
-        ...prev[matricule],
-        [subjectKey]: {
-          ...prev[matricule]?.[subjectKey],
-          [field]: value,
-        },
-      },
-    }));
-  };
-
   const updateGradeCode = (matricule, subjectKey, rawCode) => {
     const { obtenue, perfectionnement } = parseCode(rawCode);
+    if (isCodeComplete(rawCode)) {
+      pushUndo(grades);
+    }
     setGrades((prev) => ({
       ...prev,
       [matricule]: {
         ...prev[matricule],
         [subjectKey]: { rawCode, obtenue, perfectionnement },
       },
+    }));
+  };
+
+  const toggleAttendance = (matricule) => {
+    setAttendance((prev) => ({
+      ...prev,
+      [matricule]: prev[matricule] === false ? true : false,
     }));
   };
 
@@ -257,20 +470,39 @@ export default function CarnetNotes() {
     });
   };
 
-  const resetAll = async () => {
-    if (!window.confirm("Effacer toute la classe et repartir de zéro ? Cette action est irréversible.")) return;
-    setRoster([]);
-    setSubjects([]);
-    setGrades({});
-    setClassName("");
-    setActiveTab("eleves");
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch (e) {}
+  const resetAll = () => {
+    if (!activeId) return;
+    deleteClass(activeId);
   };
 
-  const handleExport = () => {
-    if (roster.length === 0) return;
+  const handleSetPin = () => {
+    const pin = window.prompt("Choisis un code à 4 chiffres pour verrouiller l'application :");
+    if (!pin) return;
+    if (!/^\d{4}$/.test(pin)) {
+      alert("Le code doit contenir exactement 4 chiffres.");
+      return;
+    }
+    localStorage.setItem(PIN_KEY, pin);
+    setPinSet(true);
+    alert("Code enregistré. Utilise l'icône de cadenas pour verrouiller l'application.");
+  };
+
+  const handleRemovePin = () => {
+    if (!window.confirm("Supprimer le code PIN ? L'application ne sera plus verrouillable.")) return;
+    localStorage.removeItem(PIN_KEY);
+    setPinSet(false);
+    setLocked(false);
+  };
+
+  const handleLockNow = () => {
+    if (!pinSet) {
+      handleSetPin();
+      return;
+    }
+    setLocked(true);
+  };
+
+  const buildWorkbook = () => {
     const header1 = ["Matricule", "Nom", "Prénoms"];
     const header2 = ["", "", ""];
     subjects.forEach((s) => {
@@ -299,7 +531,7 @@ export default function CarnetNotes() {
 
     const recapData = [["Nom", "Prénoms", "Matricule", "Moyenne générale", "Rang", "Décision"]];
     ranking.forEach((r) => {
-      const decision = r.moyenne === null ? "-" : r.moyenne >= PASSING_AVERAGE ? "Admis(e)" : "Non admis(e)";
+      const decision = r.absent ? "Absent(e)" : r.moyenne === null ? "-" : r.moyenne >= PASSING_AVERAGE ? "Admis(e)" : "Non admis(e)";
       recapData.push([r.nom, r.prenoms, r.matricule, r.moyenne !== null ? Math.round(r.moyenne * 100) / 100 : "-", r.rang ?? "-", decision]);
     });
     const ws2 = XLSX.utils.aoa_to_sheet(recapData);
@@ -307,18 +539,56 @@ export default function CarnetNotes() {
     XLSX.utils.book_append_sheet(wb, ws2, "Récapitulatif");
 
     const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const filename = `Notes_${(className || "Classe").replace(/\s+/g, "_")}_EducMaster.xlsx`;
+    return { wbout, filename };
+  };
+
+  const handleExport = () => {
+    if (roster.length === 0) return;
+    const { wbout, filename } = buildWorkbook();
     const blob = new Blob([wbout], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `Notes_${(className || "Classe").replace(/\s+/g, "_")}_EducMaster.xlsx`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
+  const handleShare = async () => {
+    if (roster.length === 0) return;
+    const { wbout, filename } = buildWorkbook();
+    const blob = new Blob([wbout], { type: "application/octet-stream" });
+    const file = new File([blob], filename, { type: "application/octet-stream" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: filename, text: `Notes de la classe ${className || ""}` });
+      } catch (e) {
+        // person cancelled the share sheet — nothing to do
+      }
+    } else {
+      alert("Le partage direct n'est pas disponible sur ce navigateur. Utilise le bouton \"Exporter\" puis partage le fichier téléchargé depuis tes fichiers.");
+    }
+  };
+
   const activeSubject = subjects.find((s) => s.key === activeTab);
+
+  if (locked) {
+    return (
+      <PinLockScreen
+        onUnlock={() => setLocked(false)}
+        onForgot={() => {
+          if (window.confirm("Retirer le code PIN oublié ? Tu pourras en redéfinir un nouveau ensuite.")) {
+            localStorage.removeItem(PIN_KEY);
+            setPinSet(false);
+            setLocked(false);
+          }
+        }}
+      />
+    );
+  }
 
   return (
     <div style={{ background: T.paper, minHeight: "100vh", fontFamily: "'IBM Plex Sans', sans-serif", color: T.ink }}>
@@ -332,7 +602,7 @@ export default function CarnetNotes() {
       {/* Header / ledger cover */}
       <div style={{ background: T.ink, borderBottom: `4px solid ${T.gold}` }} className="px-4 pt-6 pb-5 sm:px-8">
         <div className="max-w-5xl mx-auto flex items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0 flex-1">
             <p style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }} className="text-xs tracking-widest uppercase mb-1">
               NoteExpress · Import EducMaster
             </p>
@@ -344,12 +614,57 @@ export default function CarnetNotes() {
               className="bg-transparent text-2xl sm:text-3xl font-semibold outline-none w-full max-w-md placeholder-slate-400"
             />
           </div>
-          {roster.length > 0 && (
-            <button onClick={resetAll} title="Repartir de zéro" className="shrink-0 p-2 rounded-full" style={{ color: T.goldSoft }}>
-              <RotateCcw size={20} />
+          <div className="flex items-center gap-1 shrink-0">
+            {canUndo && roster.length > 0 && (
+              <button onClick={handleUndo} title="Annuler la dernière saisie" className="p-2 rounded-full" style={{ color: T.goldSoft }}>
+                <Undo2 size={19} />
+              </button>
+            )}
+            <button
+              onClick={() => setShowClassSwitcher((v) => !v)}
+              title="Mes classes"
+              className="p-2 rounded-full relative"
+              style={{ color: T.goldSoft }}
+            >
+              <Layers size={19} />
+              {classesList.length > 1 && (
+                <span
+                  className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full text-[10px] flex items-center justify-center font-semibold"
+                  style={{ background: T.gold, color: "#fff" }}
+                >
+                  {classesList.length}
+                </span>
+              )}
             </button>
-          )}
+            <button onClick={toggleDarkMode} title="Mode sombre" className="p-2 rounded-full" style={{ color: T.goldSoft }}>
+              {darkMode ? <Sun size={19} /> : <Moon size={19} />}
+            </button>
+            <button
+              onClick={handleLockNow}
+              title={pinSet ? "Verrouiller" : "Définir un code PIN"}
+              className="p-2 rounded-full"
+              style={{ color: T.goldSoft }}
+            >
+              {pinSet ? <Lock size={19} /> : <Unlock size={19} />}
+            </button>
+            {roster.length > 0 && (
+              <button onClick={resetAll} title="Supprimer cette classe" className="p-2 rounded-full" style={{ color: T.goldSoft }}>
+                <Trash2 size={19} />
+              </button>
+            )}
+          </div>
         </div>
+
+        {showClassSwitcher && (
+          <ClassSwitcher
+            classesList={classesList}
+            activeId={activeId}
+            onSwitch={switchToClass}
+            onNew={startNewClass}
+            onDelete={deleteClass}
+            onClose={() => setShowClassSwitcher(false)}
+          />
+        )}
       </div>
 
       <div className="max-w-5xl mx-auto px-4 sm:px-8 py-6">
@@ -375,6 +690,9 @@ export default function CarnetNotes() {
               <TabButton active={activeTab === "recap"} onClick={() => setActiveTab("recap")} icon={<Award size={15} />}>
                 Récapitulatif
               </TabButton>
+              <TabButton active={activeTab === "stats"} onClick={() => setActiveTab("stats")} icon={<BarChart3 size={15} />}>
+                Statistiques
+              </TabButton>
             </div>
 
             {/* Search + export row */}
@@ -392,6 +710,14 @@ export default function CarnetNotes() {
                 />
               </div>
               <button
+                onClick={handleShare}
+                className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm shrink-0"
+                style={{ background: T.greenSoft, color: T.green, border: `1px solid ${T.goldLine}` }}
+              >
+                <Share2 size={16} />
+                Partager
+              </button>
+              <button
                 onClick={handleExport}
                 className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm shrink-0"
                 style={{ background: T.gold, color: "#FFFFFF" }}
@@ -407,7 +733,16 @@ export default function CarnetNotes() {
             </p>
 
             {activeTab === "eleves" && (
-              <ElevesTab roster={filteredRoster} rankByMatricule={rankByMatricule} onRemove={removeStudent} newStudent={newStudent} setNewStudent={setNewStudent} onAdd={addStudent} />
+              <ElevesTab
+                roster={filteredRoster}
+                rankByMatricule={rankByMatricule}
+                onRemove={removeStudent}
+                newStudent={newStudent}
+                setNewStudent={setNewStudent}
+                onAdd={addStudent}
+                attendance={attendance}
+                onToggleAttendance={toggleAttendance}
+              />
             )}
 
             {activeTab === "parEleve" && (
@@ -418,6 +753,8 @@ export default function CarnetNotes() {
                 onChangeCode={updateGradeCode}
                 currentIndex={studentIndex}
                 setCurrentIndex={setStudentIndex}
+                attendance={attendance}
+                onToggleAttendance={toggleAttendance}
               />
             )}
 
@@ -427,10 +764,13 @@ export default function CarnetNotes() {
                 subject={activeSubject}
                 grades={grades}
                 onChangeCode={updateGradeCode}
+                attendance={attendance}
               />
             )}
 
             {activeTab === "recap" && <RecapTab ranking={search.trim() ? ranking.filter((r) => filteredRoster.some((f) => f.matricule === r.matricule)) : ranking} />}
+
+            {activeTab === "stats" && <StatsTab roster={roster} subjects={subjects} grades={grades} attendance={attendance} />}
           </>
         )}
       </div>
@@ -453,6 +793,128 @@ export default function CarnetNotes() {
       </button>
     );
   }
+}
+
+function ClassSwitcher({ classesList, activeId, onSwitch, onNew, onDelete, onClose }) {
+  return (
+    <div className="max-w-5xl mx-auto mt-3">
+      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.goldLine}` }}>
+        <div className="flex items-center justify-between px-4 py-2.5" style={{ background: T.greenSoft }}>
+          <span className="text-sm font-semibold" style={{ color: T.green }}>Mes classes</span>
+          <button onClick={onClose} style={{ color: T.green }}><X size={16} /></button>
+        </div>
+        <div className="max-h-64 overflow-y-auto">
+          {classesList.length === 0 && (
+            <p className="px-4 py-3 text-xs" style={{ color: T.inkSoft }}>Aucune classe enregistrée pour l'instant.</p>
+          )}
+          {classesList.map((c) => (
+            <div
+              key={c.id}
+              className="flex items-center justify-between px-4 py-2.5"
+              style={{ borderTop: `1px solid ${T.line}`, background: c.id === activeId ? T.goldSoft : "transparent" }}
+            >
+              <button onClick={() => onSwitch(c.id)} className="text-left flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">{c.className || "Classe sans nom"}</div>
+                <div className="text-xs" style={{ color: T.inkSoft }}>{(c.roster || []).length} élève(s)</div>
+              </button>
+              <button onClick={() => onDelete(c.id)} className="p-1.5 ml-2" style={{ color: T.red }}>
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          onClick={onNew}
+          className="w-full flex items-center justify-center gap-1.5 px-4 py-3 text-sm font-medium"
+          style={{ borderTop: `1px solid ${T.line}`, color: T.green }}
+        >
+          <Plus size={16} /> Nouvelle classe
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PinLockScreen({ onUnlock, onForgot }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState(false);
+
+  const handleDigit = (d) => {
+    const next = (pin + d).slice(0, 4);
+    setPin(next);
+    setError(false);
+    if (next.length === 4) {
+      const saved = localStorage.getItem(PIN_KEY);
+      setTimeout(() => {
+        if (next === saved) {
+          onUnlock();
+        } else {
+          setError(true);
+          setPin("");
+          if (navigator.vibrate) navigator.vibrate([30, 40, 30]);
+        }
+      }, 120);
+    }
+  };
+
+  return (
+    <div style={{ background: T.ink, minHeight: "100vh" }} className="flex items-center justify-center px-6">
+      <style>{`@import url('${FONT_LINK}');`}</style>
+      <div className="w-full max-w-xs text-center">
+        <div
+          className="mx-auto mb-6 w-14 h-14 rounded-2xl flex items-center justify-center"
+          style={{ background: T.gold }}
+        >
+          <Lock size={22} color="#fff" />
+        </div>
+        <p style={{ color: "#FFFFFF", fontFamily: "'Fraunces', serif" }} className="text-lg font-semibold mb-1">
+          Application verrouillée
+        </p>
+        <p className="text-xs mb-6" style={{ color: T.goldSoft }}>
+          {error ? "Code incorrect, réessaie." : "Saisis ton code à 4 chiffres"}
+        </p>
+        <div className="flex items-center justify-center gap-3 mb-8">
+          {[0, 1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className="w-3.5 h-3.5 rounded-full"
+              style={{ background: i < pin.length ? T.gold : "rgba(255,255,255,0.15)" }}
+            />
+          ))}
+        </div>
+        <div className="grid grid-cols-3 gap-3 mb-6">
+          {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
+            <button
+              key={d}
+              onClick={() => handleDigit(d)}
+              className="py-3.5 rounded-xl text-lg font-semibold"
+              style={{ background: "rgba(255,255,255,0.08)", color: "#FFFFFF" }}
+            >
+              {d}
+            </button>
+          ))}
+          <div />
+          <button
+            onClick={() => handleDigit("0")}
+            className="py-3.5 rounded-xl text-lg font-semibold"
+            style={{ background: "rgba(255,255,255,0.08)", color: "#FFFFFF" }}
+          >
+            0
+          </button>
+          <button
+            onClick={() => setPin((p) => p.slice(0, -1))}
+            className="py-3.5 rounded-xl text-sm font-semibold"
+            style={{ background: "rgba(255,255,255,0.08)", color: "#FFFFFF" }}
+          >
+            ⌫
+          </button>
+        </div>
+        <button onClick={onForgot} className="text-xs underline" style={{ color: T.goldSoft }}>
+          Code oublié ?
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function WelcomeScreen({ onStart }) {
@@ -591,7 +1053,7 @@ function ImportScreen({ onFile, fileInputRef }) {
   );
 }
 
-function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex, setCurrentIndex }) {
+function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex, setCurrentIndex, attendance, onToggleAttendance }) {
   const safeIndex = Math.min(Math.max(currentIndex, 0), Math.max(roster.length - 1, 0));
   const student = roster[safeIndex];
   const inputRefs = useRef([]);
@@ -613,9 +1075,26 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
     );
   }
 
+  const isComplete = (stu) =>
+    attendance[stu.matricule] === false ||
+    subjects.every((s) => {
+      const g = grades[stu.matricule]?.[s.key];
+      return g && g.obtenue !== "" && g.obtenue !== undefined;
+    });
+
+  const goToNextIncomplete = () => {
+    const idx = roster.findIndex((s, i) => i > safeIndex && !isComplete(s));
+    const fallback = roster.findIndex((s) => !isComplete(s));
+    const target = idx !== -1 ? idx : fallback;
+    if (target !== -1) setCurrentIndex(target);
+  };
+
+  const incompleteCount = roster.filter((s) => !isComplete(s)).length;
+  const absent = attendance[student.matricule] === false;
+
   const handleCodeChange = (subjIdx, subjectKey, digits) => {
     onChangeCode(student.matricule, subjectKey, digits);
-    if (digits.length === 3) {
+    if (isCodeComplete(digits)) {
       if (navigator.vibrate) navigator.vibrate(12);
       if (subjIdx < subjects.length - 1) {
         setTimeout(() => inputRefs.current[subjIdx + 1]?.focus(), 10);
@@ -632,6 +1111,19 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+      {incompleteCount > 0 && (
+        <div
+          className="px-4 py-2 flex items-center justify-between gap-2 text-xs"
+          style={{ background: T.redSoft, color: T.red }}
+        >
+          <span className="flex items-center gap-1.5">
+            <AlertTriangle size={14} /> {incompleteCount} élève(s) avec des notes manquantes
+          </span>
+          <button onClick={goToNextIncomplete} className="underline font-semibold whitespace-nowrap">
+            Aller au prochain
+          </button>
+        </div>
+      )}
       <div
         className="px-4 py-3 flex items-center justify-between gap-2"
         style={{ background: T.ink, color: "#FFFFFF" }}
@@ -651,6 +1143,14 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
           <div style={{ fontFamily: "'Fraunces', serif" }} className="font-semibold">
             {student.nom} {student.prenoms}
           </div>
+          <button
+            onClick={() => onToggleAttendance(student.matricule)}
+            className="mt-1 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold"
+            style={{ background: absent ? T.red : T.gold, color: "#fff" }}
+          >
+            {absent ? <UserX size={12} /> : <UserCheck size={12} />}
+            {absent ? "Absent" : "Présent"}
+          </button>
         </div>
         <button
           onClick={() => safeIndex < roster.length - 1 && setCurrentIndex(safeIndex + 1)}
@@ -675,7 +1175,7 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
         ))}
       </select>
 
-      <div className="divide-y" style={{ borderColor: T.line }}>
+      <div className="divide-y" style={{ borderColor: T.line, opacity: absent ? 0.5 : 1 }}>
         {subjects.map((s, idx) => {
           const g = grades[student.matricule]?.[s.key] || { obtenue: "", perfectionnement: "", rawCode: "" };
           const displayCode = g.rawCode !== undefined && g.rawCode !== "" ? g.rawCode : codeFromValues(g.obtenue, g.perfectionnement);
@@ -696,9 +1196,10 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
                 ref={(el) => (inputRefs.current[idx] = el)}
                 type="text"
                 inputMode="numeric"
-                    pattern="[0-9]*"
-                maxLength={3}
-                placeholder="3 chiffres (ex: 120)"
+                pattern="[0-9]*"
+                maxLength={4}
+                disabled={absent}
+                placeholder={absent ? "Élève absent" : "3 chiffres (ex: 120 ou 12:2)"}
                 value={displayCode}
                 onChange={(e) => handleCodeChange(idx, s.key, sanitizeCode(e.target.value))}
                 className="w-full text-center py-3 rounded-lg text-2xl font-semibold"
@@ -721,9 +1222,15 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
   );
 }
 
-function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStudent, onAdd }) {
+function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStudent, onAdd, attendance, onToggleAttendance }) {
+  const absentCount = roster.filter((s) => attendance[s.matricule] === false).length;
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+      <div className="px-4 py-2 text-xs flex gap-4" style={{ background: T.greenSoft, color: T.green, fontFamily: "'IBM Plex Mono', monospace" }}>
+        <span>Inscrits : <strong>{roster.length}</strong></span>
+        <span>Présents : <strong>{roster.length - absentCount}</strong></span>
+        <span style={{ color: absentCount > 0 ? T.red : T.green }}>Absents : <strong>{absentCount}</strong></span>
+      </div>
       <table className="w-full text-sm">
         <thead>
           <tr style={{ background: T.goldSoft }}>
@@ -731,19 +1238,31 @@ function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStuden
             <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Nom</th>
             <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Prénoms</th>
             <th className="text-right px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Moyenne</th>
+            <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Présence</th>
             <th className="px-3 py-2"></th>
           </tr>
         </thead>
         <tbody>
           {roster.map((s, i) => {
             const r = rankByMatricule[s.matricule];
+            const absent = attendance[s.matricule] === false;
             return (
-              <tr key={s.matricule} style={{ borderTop: `1px solid ${T.line}`, background: i % 2 ? T.paper : T.card }}>
+              <tr key={s.matricule} style={{ borderTop: `1px solid ${T.line}`, background: absent ? T.redSoft : i % 2 ? T.paper : T.card }}>
                 <td className="px-3 py-2" style={{ fontFamily: "'IBM Plex Mono', monospace", color: T.inkSoft }}>{s.matricule}</td>
                 <td className="px-3 py-2 font-medium">{s.nom}</td>
                 <td className="px-3 py-2">{s.prenoms}</td>
                 <td className="px-3 py-2 text-right" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                  {r?.moyenne !== null && r?.moyenne !== undefined ? r.moyenne.toFixed(2) : "—"}
+                  {absent ? "—" : r?.moyenne !== null && r?.moyenne !== undefined ? r.moyenne.toFixed(2) : "—"}
+                </td>
+                <td className="px-3 py-2 text-center">
+                  <button
+                    onClick={() => onToggleAttendance(s.matricule)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold"
+                    style={{ background: absent ? T.redSoft : T.greenSoft, color: absent ? T.red : T.green }}
+                  >
+                    {absent ? <UserX size={13} /> : <UserCheck size={13} />}
+                    {absent ? "Absent" : "Présent"}
+                  </button>
                 </td>
                 <td className="px-3 py-2 text-right">
                   <button onClick={() => onRemove(s.matricule)} style={{ color: T.red }}>
@@ -755,7 +1274,7 @@ function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStuden
           })}
           {roster.length === 0 && (
             <tr>
-              <td colSpan={5} className="px-3 py-6 text-center text-sm" style={{ color: T.inkSoft }}>
+              <td colSpan={6} className="px-3 py-6 text-center text-sm" style={{ color: T.inkSoft }}>
                 Aucun élève ne correspond à la recherche.
               </td>
             </tr>
@@ -792,12 +1311,12 @@ function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStuden
   );
 }
 
-function SubjectTab({ roster, subject, grades, onChangeCode }) {
+function SubjectTab({ roster, subject, grades, onChangeCode, attendance }) {
   const inputRefs = useRef([]);
 
   const handleChange = (i, matricule, digits) => {
     onChangeCode(matricule, subject.key, digits);
-    if (digits.length === 3) {
+    if (isCodeComplete(digits)) {
       if (navigator.vibrate) navigator.vibrate(12);
       if (i < roster.length - 1) {
         setTimeout(() => inputRefs.current[i + 1]?.focus(), 10);
@@ -805,11 +1324,25 @@ function SubjectTab({ roster, subject, grades, onChangeCode }) {
     }
   };
 
-  const doneCount = roster.filter((s) => {
+  const presentRoster = roster.filter((s) => attendance[s.matricule] !== false);
+  const doneCount = presentRoster.filter((s) => {
     const g = grades[s.matricule]?.[subject.key];
     return g && g.obtenue !== "" && g.obtenue !== undefined;
   }).length;
-  const pct = roster.length > 0 ? Math.round((doneCount / roster.length) * 100) : 0;
+  const pct = presentRoster.length > 0 ? Math.round((doneCount / presentRoster.length) * 100) : 0;
+  const missingCount = presentRoster.length - doneCount;
+
+  const goToFirstMissing = () => {
+    const idx = roster.findIndex((s) => {
+      if (attendance[s.matricule] === false) return false;
+      const g = grades[s.matricule]?.[subject.key];
+      return !(g && g.obtenue !== "" && g.obtenue !== undefined);
+    });
+    if (idx !== -1) {
+      inputRefs.current[idx]?.focus();
+      inputRefs.current[idx]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  };
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
@@ -817,7 +1350,8 @@ function SubjectTab({ roster, subject, grades, onChangeCode }) {
         <div className="flex items-center justify-between text-xs mb-1.5" style={{ color: T.green }}>
           <span>
             Saisis <strong>3 chiffres</strong> : les 2 premiers = note obtenue, le dernier = perfectionnement (0, 1 ou 2 seulement).
-            Exemple : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>120</span> → 12 + 0 = <strong>12</strong>.
+            Exemple : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>120</span> ou{" "}
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>12:2</span> → 12 + 2 = <strong>14</strong>.
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -825,10 +1359,25 @@ function SubjectTab({ roster, subject, grades, onChangeCode }) {
             <div className="h-full rounded-full" style={{ width: `${pct}%`, background: T.green }} />
           </div>
           <span className="text-xs font-semibold whitespace-nowrap" style={{ color: T.green, fontFamily: "'IBM Plex Mono', monospace" }}>
-            {doneCount}/{roster.length}
+            {doneCount}/{presentRoster.length}
           </span>
         </div>
       </div>
+
+      {missingCount > 0 && (
+        <div
+          className="px-4 py-2 flex items-center justify-between gap-2 text-xs"
+          style={{ background: T.redSoft, color: T.red }}
+        >
+          <span className="flex items-center gap-1.5">
+            <AlertTriangle size={14} /> {missingCount} note(s) manquante(s)
+          </span>
+          <button onClick={goToFirstMissing} className="underline font-semibold whitespace-nowrap">
+            Aller à la première
+          </button>
+        </div>
+      )}
+
       <table className="w-full text-sm">
         <thead>
           <tr style={{ background: T.goldSoft }}>
@@ -840,16 +1389,17 @@ function SubjectTab({ roster, subject, grades, onChangeCode }) {
         </thead>
         <tbody>
           {roster.map((s, i) => {
+            const absent = attendance[s.matricule] === false;
             const g = grades[s.matricule]?.[subject.key] || { obtenue: "", perfectionnement: "", rawCode: "" };
             const displayCode = g.rawCode !== undefined && g.rawCode !== "" ? g.rawCode : codeFromValues(g.obtenue, g.perfectionnement);
             const hasAny = g.obtenue !== "" && g.obtenue !== undefined;
             const total = hasAny ? (toNum(g.obtenue) || 0) + (toNum(g.perfectionnement) || 0) : null;
             const color = total === null ? T.inkSoft : total >= 10 ? T.green : T.red;
             return (
-              <tr key={s.matricule} style={{ borderTop: `1px solid ${T.line}`, background: i % 2 ? T.paper : T.card }}>
+              <tr key={s.matricule} style={{ borderTop: `1px solid ${T.line}`, background: absent ? T.redSoft : i % 2 ? T.paper : T.card, opacity: absent ? 0.6 : 1 }}>
                 <td className="px-3 py-2">
                   <div className="font-medium">{s.nom}</div>
-                  <div className="text-xs" style={{ color: T.inkSoft }}>{s.prenoms}</div>
+                  <div className="text-xs" style={{ color: T.inkSoft }}>{s.prenoms}{absent ? " · Absent" : ""}</div>
                 </td>
                 <td className="px-2 py-2">
                   <input
@@ -857,8 +1407,9 @@ function SubjectTab({ roster, subject, grades, onChangeCode }) {
                     type="text"
                     inputMode="numeric"
                     pattern="[0-9]*"
-                    maxLength={3}
-                    placeholder="0000"
+                    maxLength={4}
+                    disabled={absent}
+                    placeholder="000"
                     value={displayCode}
                     onChange={(e) => handleChange(i, s.matricule, sanitizeCode(e.target.value))}
                     className="w-24 mx-auto block text-center px-2 py-1.5 rounded-md text-base font-semibold"
@@ -931,11 +1482,11 @@ function RecapTab({ ranking }) {
                   className="px-3 py-2 text-right font-semibold"
                   style={{ fontFamily: "'IBM Plex Mono', monospace", color: r.moyenne === null ? T.inkSoft : isPassing ? T.green : T.red }}
                 >
-                  {r.moyenne !== null ? r.moyenne.toFixed(2) : "En attente"}
+                  {r.moyenne !== null ? r.moyenne.toFixed(2) : r.absent ? "Absent(e)" : "En attente"}
                 </td>
                 <td className="px-3 py-2 text-center">
                   {r.moyenne === null ? (
-                    <span className="text-xs" style={{ color: T.inkSoft }}>—</span>
+                    <span className="text-xs" style={{ color: T.inkSoft }}>{r.absent ? "Absent(e)" : "—"}</span>
                   ) : (
                     <span
                       className="inline-block px-2.5 py-1 rounded-full text-xs font-semibold"
@@ -953,6 +1504,90 @@ function RecapTab({ ranking }) {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function StatsTab({ roster, subjects, grades, attendance }) {
+  const presentRoster = roster.filter((s) => attendance[s.matricule] !== false);
+
+  const stats = subjects.map((s) => {
+    let sum = 0;
+    let count = 0;
+    let passCount = 0;
+    presentRoster.forEach((stu) => {
+      const g = grades[stu.matricule]?.[s.key];
+      if (g && g.obtenue !== "" && g.obtenue !== undefined) {
+        const total = (toNum(g.obtenue) || 0) + (toNum(g.perfectionnement) || 0);
+        sum += total;
+        count += 1;
+        if (total >= SUBJECT_PASS) passCount += 1;
+      }
+    });
+    const average = count > 0 ? sum / count : null;
+    const passRate = count > 0 ? Math.round((passCount / count) * 100) : null;
+    return { key: s.key, label: s.label, average, passRate, count };
+  });
+
+  const classAverage = (() => {
+    const withAvg = stats.filter((s) => s.average !== null);
+    if (withAvg.length === 0) return null;
+    return withAvg.reduce((acc, s) => acc + s.average, 0) / withAvg.length;
+  })();
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+        <div className="px-4 py-3 flex items-center justify-between" style={{ background: T.ink, color: "#FFFFFF" }}>
+          <span style={{ fontFamily: "'Fraunces', serif" }} className="font-semibold">Statistiques par matière</span>
+          <span className="text-xs" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
+            {presentRoster.length} élève(s) présent(s)
+          </span>
+        </div>
+        {classAverage !== null && (
+          <div className="px-4 py-2.5 text-xs" style={{ background: T.greenSoft, color: T.green }}>
+            Moyenne générale de la classe (toutes matières confondues) : <strong>{classAverage.toFixed(2)}/20</strong>
+          </div>
+        )}
+        <div className="divide-y" style={{ borderColor: T.line }}>
+          {stats.map((s) => (
+            <div key={s.key} className="p-4">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-sm font-medium">{s.label}</span>
+                <span className="text-xs" style={{ color: T.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
+                  {s.count}/{presentRoster.length} saisies
+                </span>
+              </div>
+              {s.average === null ? (
+                <p className="text-xs" style={{ color: T.inkSoft }}>Aucune note saisie pour l'instant.</p>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.goldLine }}>
+                      <div
+                        className="h-full rounded-full"
+                        style={{ width: `${Math.min(100, (s.average / 20) * 100)}%`, background: s.average >= SUBJECT_PASS ? T.green : T.red }}
+                      />
+                    </div>
+                    <span
+                      className="text-xs font-semibold whitespace-nowrap"
+                      style={{ color: s.average >= SUBJECT_PASS ? T.green : T.red, fontFamily: "'IBM Plex Mono', monospace" }}
+                    >
+                      {s.average.toFixed(2)}/20
+                    </span>
+                  </div>
+                  <p className="text-xs" style={{ color: T.inkSoft }}>
+                    Taux de réussite (≥ {SUBJECT_PASS}/20) : <strong>{s.passRate}%</strong>
+                  </p>
+                </>
+              )}
+            </div>
+          ))}
+          {stats.length === 0 && (
+            <p className="p-4 text-sm text-center" style={{ color: T.inkSoft }}>Aucune matière à afficher.</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
