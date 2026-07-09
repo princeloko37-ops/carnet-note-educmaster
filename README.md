@@ -1,9 +1,9 @@
-# Carnet de Notes — Import EducMaster
+# NoteExpress — Import EducMaster
 
 Application permettant à un directeur d'école d'importer la liste d'une classe
-(fichier Excel EducMaster), de saisir les notes matière par matière, de calculer
-automatiquement les moyennes et les rangs, puis d'exporter un fichier Excel prêt
-à être réimporté dans EducMaster.
+(fichier Excel EducMaster), de saisir les notes en quelques secondes par élève,
+de calculer automatiquement les moyennes et les rangs, puis d'exporter un
+fichier Excel prêt à être réimporté dans EducMaster.
 
 ## Développement local
 

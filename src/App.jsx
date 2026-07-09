@@ -3,18 +3,18 @@ import * as XLSX from "xlsx";
 import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight } from "lucide-react";
 
 const T = {
-  paper: "#F8F4EA",
-  ink: "#1E2A44",
-  inkSoft: "#5B6478",
-  gold: "#B4841F",
-  goldSoft: "#EADFC0",
-  goldLine: "#DDCE9F",
-  green: "#2F6B4F",
-  greenSoft: "#E4EEE8",
-  red: "#AD3A32",
+  paper: "#F3FBF7",
+  ink: "#0B4A3A",
+  inkSoft: "#5B7A70",
+  gold: "#12946B",
+  goldSoft: "#DCF2E9",
+  goldLine: "#BFE3D3",
+  green: "#0E7C5A",
+  greenSoft: "#E3F5EE",
+  red: "#B23A32",
   redSoft: "#F5E4E1",
   card: "#FFFFFF",
-  line: "#E7DFCB",
+  line: "#D8ECE4",
 };
 
 const FONT_LINK = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap";
@@ -27,16 +27,24 @@ function codeFromValues(obtenue, perfectionnement) {
   const pNum = toNum(perfectionnement);
   if (oNum === null && pNum === null) return "";
   const o = String(Math.max(0, Math.round(oNum || 0))).padStart(2, "0").slice(-2);
-  const p = String(Math.max(0, Math.round(pNum || 0))).padStart(2, "0").slice(-2);
+  const p = String(Math.min(2, Math.max(0, Math.round(pNum || 0))));
   return o + p;
 }
 
 function parseCode(code) {
-  if (!code || code.length < 4) return { obtenue: "", perfectionnement: "" };
+  if (!code || code.length < 3) return { obtenue: "", perfectionnement: "" };
   return {
     obtenue: String(parseInt(code.slice(0, 2), 10)),
-    perfectionnement: String(parseInt(code.slice(2, 4), 10)),
+    perfectionnement: String(Math.min(2, parseInt(code.slice(2, 3), 10) || 0)),
   };
+}
+
+function sanitizeCode(value) {
+  let digits = value.replace(/\D/g, "").slice(0, 3);
+  if (digits.length === 3 && !["0", "1", "2"].includes(digits[2])) {
+    digits = digits.slice(0, 2);
+  }
+  return digits;
 }
 
 function cleanMatricule(v) {
@@ -90,8 +98,9 @@ export default function CarnetNotes() {
   const [subjects, setSubjects] = useState([]);
   const [grades, setGrades] = useState({});
   const [className, setClassName] = useState("");
-  const [activeTab, setActiveTab] = useState("eleves");
+  const [activeTab, setActiveTab] = useState("parEleve");
   const [studentIndex, setStudentIndex] = useState(0);
+  const [showWelcome, setShowWelcome] = useState(true);
   const [search, setSearch] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
@@ -109,7 +118,7 @@ export default function CarnetNotes() {
         setSubjects(parsed.subjects || []);
         setGrades(parsed.grades || {});
         setClassName(parsed.className || "");
-        if (parsed.roster && parsed.roster.length > 0) setActiveTab("eleves");
+        if (parsed.roster && parsed.roster.length > 0) setActiveTab("parEleve");
       }
     } catch (e) {
       // no saved data yet
@@ -194,7 +203,7 @@ export default function CarnetNotes() {
         setRoster(newRoster);
         setGrades(newGrades);
         setClassName(guessedClassName || "");
-        setActiveTab("eleves");
+        setActiveTab("parEleve");
       } catch (err) {
         alert("Impossible de lire ce fichier. Vérifie qu'il s'agit bien d'un export EducMaster (.xlsx).");
       }
@@ -325,7 +334,7 @@ export default function CarnetNotes() {
         <div className="max-w-5xl mx-auto flex items-start justify-between gap-4">
           <div>
             <p style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }} className="text-xs tracking-widest uppercase mb-1">
-              Carnet de Notes · Import EducMaster
+              NoteExpress · Import EducMaster
             </p>
             <input
               value={className}
@@ -344,7 +353,9 @@ export default function CarnetNotes() {
       </div>
 
       <div className="max-w-5xl mx-auto px-4 sm:px-8 py-6">
-        {roster.length === 0 ? (
+        {roster.length === 0 && showWelcome ? (
+          <WelcomeScreen onStart={() => setShowWelcome(false)} />
+        ) : roster.length === 0 ? (
           <ImportScreen onFile={handleFile} fileInputRef={fileInputRef} />
         ) : (
           <>
@@ -444,8 +455,66 @@ export default function CarnetNotes() {
   }
 }
 
+function WelcomeScreen({ onStart }) {
+  return (
+    <div
+      className="rounded-2xl overflow-hidden text-center"
+      style={{ background: T.card, border: `1px solid ${T.line}` }}
+    >
+      <div className="px-6 pt-10 pb-8" style={{ background: T.ink }}>
+        <div
+          className="mx-auto mb-4 w-16 h-16 rounded-2xl flex items-center justify-center"
+          style={{ background: T.gold, fontFamily: "'Fraunces', serif" }}
+        >
+          <span className="text-2xl font-bold" style={{ color: T.ink }}>NE</span>
+        </div>
+        <p className="text-xs tracking-widest uppercase mb-2" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
+          Application pour directeurs d'école
+        </p>
+        <h1 style={{ fontFamily: "'Fraunces', serif", color: "#FFFFFF" }} className="text-2xl font-semibold">
+          NoteExpress
+        </h1>
+      </div>
+
+      <div className="px-6 py-7">
+        <p className="text-sm mb-6" style={{ color: T.inkSoft }}>
+          Importe la liste EducMaster de ta classe, saisis les notes en quelques secondes par élève,
+          puis exporte un fichier prêt à réimporter — sans jongler avec les cellules Excel.
+        </p>
+
+        <div className="grid grid-cols-3 gap-3 mb-7 text-left">
+          <div className="p-3 rounded-lg" style={{ background: T.greenSoft }}>
+            <div className="text-xs font-semibold mb-1" style={{ color: T.green }}>1. Importer</div>
+            <div className="text-xs" style={{ color: T.inkSoft }}>Ton fichier EducMaster</div>
+          </div>
+          <div className="p-3 rounded-lg" style={{ background: T.goldSoft }}>
+            <div className="text-xs font-semibold mb-1" style={{ color: T.gold }}>2. Saisir</div>
+            <div className="text-xs" style={{ color: T.inkSoft }}>3 chiffres par matière</div>
+          </div>
+          <div className="p-3 rounded-lg" style={{ background: T.greenSoft }}>
+            <div className="text-xs font-semibold mb-1" style={{ color: T.green }}>3. Exporter</div>
+            <div className="text-xs" style={{ color: T.inkSoft }}>Prêt pour EducMaster</div>
+          </div>
+        </div>
+
+        <button
+          onClick={onStart}
+          className="w-full px-5 py-3 rounded-lg font-medium text-sm"
+          style={{ background: T.gold, color: "#FFFFFF" }}
+        >
+          Commencer →
+        </button>
+        <p className="text-xs mt-4" style={{ color: T.inkSoft }}>
+          Conçu par S. Prince LOKO
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function ImportScreen({ onFile, fileInputRef }) {
   const [dragOver, setDragOver] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   return (
     <div
       onDragOver={(e) => {
@@ -474,10 +543,33 @@ function ImportScreen({ onFile, fileInputRef }) {
       <h2 style={{ fontFamily: "'Fraunces', serif" }} className="text-xl font-semibold mb-2">
         Importer la liste de la classe
       </h2>
-      <p className="text-sm max-w-md mx-auto mb-6" style={{ color: T.inkSoft }}>
+      <p className="text-sm max-w-md mx-auto mb-4" style={{ color: T.inkSoft }}>
         Dépose ici le fichier Excel EducMaster (vide ou déjà rempli) — matricules, noms et prénoms seront
         récupérés automatiquement, ainsi que la liste des matières.
       </p>
+
+      <button
+        onClick={() => setShowHelp((v) => !v)}
+        className="text-xs underline mb-6"
+        style={{ color: T.green }}
+      >
+        {showHelp ? "Masquer l'aide" : "Je ne sais pas où trouver ce fichier sur mon téléphone"}
+      </button>
+
+      {showHelp && (
+        <div
+          className="text-left text-xs rounded-lg p-4 mb-6 max-w-md mx-auto"
+          style={{ background: T.greenSoft, color: T.green }}
+        >
+          <ol className="list-decimal ml-4 space-y-1.5">
+            <li>Ouvre l'application <strong>Fichiers</strong> (ou <strong>Mes Fichiers / My Files</strong>) sur ton téléphone.</li>
+            <li>Va dans le dossier <strong>Téléchargements</strong> (Download) — c'est là que les fichiers reçus par WhatsApp, email ou navigateur atterrissent en général.</li>
+            <li>Cherche le fichier envoyé par EducMaster (il se termine par <strong>.xlsx</strong>).</li>
+            <li>Reviens ici et appuie sur le bouton ci-dessous — le sélecteur de fichiers de ton téléphone s'ouvrira au même endroit.</li>
+          </ol>
+        </div>
+      )}
+
       <button
         onClick={() => fileInputRef.current?.click()}
         className="px-5 py-2.5 rounded-lg font-medium text-sm"
@@ -523,7 +615,8 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
 
   const handleCodeChange = (subjIdx, subjectKey, digits) => {
     onChangeCode(student.matricule, subjectKey, digits);
-    if (digits.length === 4) {
+    if (digits.length === 3) {
+      if (navigator.vibrate) navigator.vibrate(12);
       if (subjIdx < subjects.length - 1) {
         setTimeout(() => inputRefs.current[subjIdx + 1]?.focus(), 10);
       } else if (safeIndex < roster.length - 1) {
@@ -603,10 +696,11 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
                 ref={(el) => (inputRefs.current[idx] = el)}
                 type="text"
                 inputMode="numeric"
-                maxLength={4}
-                placeholder="Saisir 4 chiffres (ex: 1402)"
+                    pattern="[0-9]*"
+                maxLength={3}
+                placeholder="3 chiffres (ex: 120)"
                 value={displayCode}
-                onChange={(e) => handleCodeChange(idx, s.key, e.target.value.replace(/\D/g, "").slice(0, 4))}
+                onChange={(e) => handleCodeChange(idx, s.key, sanitizeCode(e.target.value))}
                 className="w-full text-center py-3 rounded-lg text-2xl font-semibold"
                 style={{
                   border: `2px solid ${hasAny ? T.green : T.goldLine}`,
@@ -703,23 +797,43 @@ function SubjectTab({ roster, subject, grades, onChangeCode }) {
 
   const handleChange = (i, matricule, digits) => {
     onChangeCode(matricule, subject.key, digits);
-    if (digits.length === 4 && i < roster.length - 1) {
-      setTimeout(() => inputRefs.current[i + 1]?.focus(), 10);
+    if (digits.length === 3) {
+      if (navigator.vibrate) navigator.vibrate(12);
+      if (i < roster.length - 1) {
+        setTimeout(() => inputRefs.current[i + 1]?.focus(), 10);
+      }
     }
   };
 
+  const doneCount = roster.filter((s) => {
+    const g = grades[s.matricule]?.[subject.key];
+    return g && g.obtenue !== "" && g.obtenue !== undefined;
+  }).length;
+  const pct = roster.length > 0 ? Math.round((doneCount / roster.length) * 100) : 0;
+
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-      <div className="px-4 py-2.5 text-xs" style={{ background: T.greenSoft, color: T.green, borderBottom: `1px solid ${T.line}` }}>
-        Saisis <strong>4 chiffres</strong> : les 2 premiers = note obtenue, les 2 derniers = perfectionnement.
-        Exemple : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>1202</span> → 12 + 02 = <strong>14</strong>.
-        Le champ suivant se sélectionne automatiquement.
+      <div className="px-4 py-2.5" style={{ background: T.greenSoft, borderBottom: `1px solid ${T.line}` }}>
+        <div className="flex items-center justify-between text-xs mb-1.5" style={{ color: T.green }}>
+          <span>
+            Saisis <strong>3 chiffres</strong> : les 2 premiers = note obtenue, le dernier = perfectionnement (0, 1 ou 2 seulement).
+            Exemple : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>120</span> → 12 + 0 = <strong>12</strong>.
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.goldLine }}>
+            <div className="h-full rounded-full" style={{ width: `${pct}%`, background: T.green }} />
+          </div>
+          <span className="text-xs font-semibold whitespace-nowrap" style={{ color: T.green, fontFamily: "'IBM Plex Mono', monospace" }}>
+            {doneCount}/{roster.length}
+          </span>
+        </div>
       </div>
       <table className="w-full text-sm">
         <thead>
           <tr style={{ background: T.goldSoft }}>
             <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Élève</th>
-            <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Code (OOPP)</th>
+            <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Code (OO-P)</th>
             <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Détail</th>
             <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Total</th>
           </tr>
@@ -742,10 +856,11 @@ function SubjectTab({ roster, subject, grades, onChangeCode }) {
                     ref={(el) => (inputRefs.current[i] = el)}
                     type="text"
                     inputMode="numeric"
-                    maxLength={4}
+                    pattern="[0-9]*"
+                    maxLength={3}
                     placeholder="0000"
                     value={displayCode}
-                    onChange={(e) => handleChange(i, s.matricule, e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    onChange={(e) => handleChange(i, s.matricule, sanitizeCode(e.target.value))}
                     className="w-24 mx-auto block text-center px-2 py-1.5 rounded-md text-base font-semibold"
                     style={{ border: `1px solid ${T.line}`, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.15em" }}
                   />
