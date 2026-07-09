@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight, Moon, Sun, Lock, Unlock, Layers, Share2, BarChart3, AlertTriangle, UserX, UserCheck, Undo2, Plus, X } from "lucide-react";
+import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight, Moon, Sun, Lock, Unlock, Layers, Share2, BarChart3, AlertTriangle, UserX, UserCheck, Undo2, Plus, X, ArrowUpDown } from "lucide-react";
 
 const LIGHT_THEME = {
   paper: "#F3FBF7",
@@ -48,78 +48,77 @@ const PIN_KEY = "carnet-notes:pin";
 const DARK_KEY = "carnet-notes:dark";
 const PASSING_AVERAGE = 9; // moyenne générale minimale pour passer en classe supérieure
 const SUBJECT_PASS = 10; // seuil de réussite par matière (sur 20)
+const EVALUATION_TYPES = ["Évaluation Formative 1", "Évaluation Sommative 1", "Évaluation Sommative 2", "Évaluation Sommative 3"];
 
 function codeFromValues(obtenue, perfectionnement) {
   const oNum = toNum(obtenue);
   const pNum = toNum(perfectionnement);
   if (oNum === null && pNum === null) return "";
-  const o = String(Math.max(0, Math.round(oNum || 0))).padStart(2, "0").slice(-2);
+  const o = String(oNum ?? 0).replace(".", ",");
   const p = String(Math.min(2, Math.max(0, Math.round(pNum || 0))));
-  return o + p;
+  return `${o} ${p}`;
 }
 
-const CODE_SEPARATORS = [":", ";", "'"];
+// Format: "<note obtenue, entier ou décimal>  <perfectionnement 0/1/2>"
+// Examples: "14,5 2"  "12 0"  "18.5 1"
+const CODE_PATTERN = /^(\d{1,2}(?:[.,]\d{1,2})?)\s+([0-2])$/;
 
 function parseCode(code) {
   if (!code) return { obtenue: "", perfectionnement: "" };
-  const sep = CODE_SEPARATORS.find((s) => code.includes(s));
-  if (sep) {
-    const [left, right] = code.split(sep);
-    if (!left || left.length < 2 || !right || right.length < 1) return { obtenue: "", perfectionnement: "" };
-    return {
-      obtenue: String(parseInt(left.slice(0, 2), 10)),
-      perfectionnement: String(Math.min(2, parseInt(right[0], 10) || 0)),
-    };
-  }
-  if (code.length < 3) return { obtenue: "", perfectionnement: "" };
+  const m = code.trim().match(CODE_PATTERN);
+  if (!m) return { obtenue: "", perfectionnement: "" };
   return {
-    obtenue: String(parseInt(code.slice(0, 2), 10)),
-    perfectionnement: String(Math.min(2, parseInt(code.slice(2, 3), 10) || 0)),
+    obtenue: m[1].replace(",", "."),
+    perfectionnement: m[2],
   };
 }
 
-// A code is "complete" once it has 2 digits + perfectionnement digit,
-// with or without a separator (12:2 or 122 both work).
 function isCodeComplete(code) {
-  if (!code) return false;
-  const sep = CODE_SEPARATORS.find((s) => code.includes(s));
-  if (sep) {
-    const [left, right] = code.split(sep);
-    return !!left && left.length === 2 && !!right && right.length === 1;
-  }
-  return code.length === 3;
+  return !!code && CODE_PATTERN.test(code.trim());
 }
 
-// Lets the person type digits freely, plus at most one separator (: ; ')
-// right after the 2-digit "note obtenue", followed by a single 0/1/2 digit.
+// Lets the person type freely: digits, one decimal separator (, or .),
+// a space, then a single perfectionnement digit (0, 1 or 2).
 function sanitizeCode(value) {
-  let out = "";
-  let digitsBefore = 0;
-  let sepUsed = false;
-  let digitsAfter = 0;
-  for (const ch of value) {
-    if (/[0-9]/.test(ch)) {
-      if (!sepUsed) {
-        if (digitsBefore < 2) {
+  const filtered = value.replace(/[^0-9.,\s]/g, "");
+  const spaceIdx = filtered.search(/\s/);
+
+  const cleanObtenue = (raw) => {
+    let out = "";
+    let seenSep = false;
+    let intDigits = 0;
+    let decDigits = 0;
+    for (const ch of raw) {
+      if (/[0-9]/.test(ch)) {
+        if (!seenSep) {
+          if (intDigits < 2) {
+            out += ch;
+            intDigits++;
+          }
+        } else if (decDigits < 2) {
           out += ch;
-          digitsBefore++;
+          decDigits++;
         }
-      } else if (digitsAfter < 1 && ["0", "1", "2"].includes(ch)) {
+      } else if (/[.,]/.test(ch) && !seenSep && intDigits > 0) {
         out += ch;
-        digitsAfter++;
-      }
-    } else if (CODE_SEPARATORS.includes(ch)) {
-      if (!sepUsed && digitsBefore === 2) {
-        out += ch;
-        sepUsed = true;
+        seenSep = true;
       }
     }
+    return out;
+  };
+
+  if (spaceIdx === -1) {
+    return cleanObtenue(filtered);
   }
-  // Fallback for the no-separator style: 3rd digit must be 0/1/2
-  if (!sepUsed && out.length === 3 && !["0", "1", "2"].includes(out[2])) {
-    out = out.slice(0, 2);
-  }
-  return out;
+  const obtenuePart = cleanObtenue(filtered.slice(0, spaceIdx));
+  const rest = filtered.slice(spaceIdx).replace(/\s/g, "");
+  const perf = rest.length > 0 && ["0", "1", "2"].includes(rest[0]) ? rest[0] : "";
+  return perf ? `${obtenuePart} ${perf}` : obtenuePart.length > 0 ? `${obtenuePart} ` : "";
+}
+
+function formatNum(n) {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(".", ",");
 }
 
 function cleanMatricule(v) {
@@ -175,6 +174,7 @@ export default function CarnetNotes() {
   const [grades, setGrades] = useState({});
   const [attendance, setAttendance] = useState({}); // matricule -> false means absent (absence of key = present)
   const [className, setClassName] = useState("");
+  const [evaluationType, setEvaluationType] = useState("");
   const [activeTab, setActiveTab] = useState("parEleve");
   const [studentIndex, setStudentIndex] = useState(0);
   const [showWelcome, setShowWelcome] = useState(true);
@@ -186,6 +186,7 @@ export default function CarnetNotes() {
   const [classesList, setClassesList] = useState([]); // catalog of all saved classes (metadata + snapshot)
   const [activeId, setActiveId] = useState(null);
   const [showClassSwitcher, setShowClassSwitcher] = useState(false);
+  const [showReorder, setShowReorder] = useState(false);
 
   const [darkMode, setDarkMode] = useState(() => {
     const dark = typeof window !== "undefined" && localStorage.getItem(DARK_KEY) === "1";
@@ -248,6 +249,7 @@ export default function CarnetNotes() {
         setGrades(active.grades || {});
         setAttendance(active.attendance || {});
         setClassName(active.className || "");
+        setEvaluationType(active.evaluationType || "");
         setActiveTab("parEleve");
         setShowWelcome(false);
       }
@@ -270,7 +272,7 @@ export default function CarnetNotes() {
           const others = prev.filter((c) => c.id !== activeId);
           const updated = [
             ...others,
-            { id: activeId, className, roster, subjects, grades, attendance, updatedAt: Date.now() },
+            { id: activeId, className, evaluationType, roster, subjects, grades, attendance, updatedAt: Date.now() },
           ];
           localStorage.setItem(CLASSES_KEY, JSON.stringify(updated));
           localStorage.setItem(ACTIVE_KEY, activeId);
@@ -282,7 +284,7 @@ export default function CarnetNotes() {
       }
     }, 700);
     return () => clearTimeout(saveTimer.current);
-  }, [roster, subjects, grades, attendance, className, activeId, loaded]);
+  }, [roster, subjects, grades, attendance, className, evaluationType, activeId, loaded]);
 
   const toggleDarkMode = () => {
     setDarkMode((prev) => {
@@ -302,6 +304,7 @@ export default function CarnetNotes() {
     setGrades({});
     setAttendance({});
     setClassName("");
+    setEvaluationType("");
     setActiveTab("parEleve");
     setStudentIndex(0);
     setShowWelcome(false);
@@ -319,6 +322,7 @@ export default function CarnetNotes() {
     setGrades(rec.grades || {});
     setAttendance(rec.attendance || {});
     setClassName(rec.className || "");
+    setEvaluationType(rec.evaluationType || "");
     setActiveTab("parEleve");
     setStudentIndex(0);
     setShowClassSwitcher(false);
@@ -514,7 +518,8 @@ export default function CarnetNotes() {
       const row = [stu.rawMatricule || stu.matricule, stu.nom, stu.prenoms];
       subjects.forEach((s) => {
         const g = grades[stu.matricule]?.[s.key] || {};
-        row.push(g.obtenue ?? "", g.perfectionnement ?? "");
+        const obtenueDisplay = g.obtenue !== undefined && g.obtenue !== "" ? String(g.obtenue).replace(".", ",") : "";
+        row.push(obtenueDisplay, g.perfectionnement ?? "");
       });
       wsData.push(row);
     });
@@ -539,7 +544,8 @@ export default function CarnetNotes() {
     XLSX.utils.book_append_sheet(wb, ws2, "Récapitulatif");
 
     const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    const filename = `Notes_${(className || "Classe").replace(/\s+/g, "_")}_EducMaster.xlsx`;
+    const evalSlug = evaluationType ? `_${evaluationType.replace(/\s+/g, "_")}` : "";
+    const filename = `Notes_${(className || "Classe").replace(/\s+/g, "_")}${evalSlug}_EducMaster.xlsx`;
     return { wbout, filename };
   };
 
@@ -613,6 +619,20 @@ export default function CarnetNotes() {
               style={{ fontFamily: "'Fraunces', serif", color: "#FFFFFF", borderBottom: `1px solid ${T.inkSoft}` }}
               className="bg-transparent text-2xl sm:text-3xl font-semibold outline-none w-full max-w-md placeholder-slate-400"
             />
+            {roster.length > 0 && evaluationType && (
+              <select
+                value={evaluationType}
+                onChange={(e) => setEvaluationType(e.target.value)}
+                className="mt-1.5 text-xs rounded-full px-2.5 py-1 outline-none"
+                style={{ background: T.gold, color: "#fff", border: "none" }}
+              >
+                {EVALUATION_TYPES.map((ev) => (
+                  <option key={ev} value={ev} style={{ color: T.ink }}>
+                    {ev}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
             {canUndo && roster.length > 0 && (
@@ -672,6 +692,8 @@ export default function CarnetNotes() {
           <WelcomeScreen onStart={() => setShowWelcome(false)} />
         ) : roster.length === 0 ? (
           <ImportScreen onFile={handleFile} fileInputRef={fileInputRef} />
+        ) : !evaluationType ? (
+          <EvaluationPicker onSelect={setEvaluationType} />
         ) : (
           <>
             {/* Tabs */}
@@ -710,6 +732,14 @@ export default function CarnetNotes() {
                 />
               </div>
               <button
+                onClick={() => setShowReorder((v) => !v)}
+                title="Réorganiser l'ordre des matières"
+                className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg font-medium text-sm shrink-0"
+                style={{ background: T.card, color: T.inkSoft, border: `1px solid ${T.line}` }}
+              >
+                <ArrowUpDown size={16} />
+              </button>
+              <button
                 onClick={handleShare}
                 className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm shrink-0"
                 style={{ background: T.greenSoft, color: T.green, border: `1px solid ${T.goldLine}` }}
@@ -726,6 +756,10 @@ export default function CarnetNotes() {
                 Exporter pour EducMaster
               </button>
             </div>
+
+            {showReorder && (
+              <ReorderPanel subjects={subjects} setSubjects={setSubjects} onClose={() => setShowReorder(false)} />
+            )}
 
             <p className="text-xs mb-4" style={{ color: T.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
               {saveState === "saving" ? "Enregistrement…" : saveState === "saved" ? "✓ Enregistré sur cet appareil" : ""}
@@ -917,6 +951,89 @@ function PinLockScreen({ onUnlock, onForgot }) {
   );
 }
 
+function ReorderPanel({ subjects, setSubjects, onClose }) {
+  const move = (index, dir) => {
+    const target = index + dir;
+    if (target < 0 || target >= subjects.length) return;
+    const next = [...subjects];
+    [next[index], next[target]] = [next[target], next[index]];
+    setSubjects(next);
+  };
+
+  return (
+    <div className="rounded-xl overflow-hidden mb-4" style={{ background: T.card, border: `1px solid ${T.goldLine}` }}>
+      <div className="flex items-center justify-between px-4 py-2.5" style={{ background: T.greenSoft }}>
+        <span className="text-sm font-semibold" style={{ color: T.green }}>Ordre des matières pour la saisie</span>
+        <button onClick={onClose} style={{ color: T.green }}><X size={16} /></button>
+      </div>
+      <div>
+        {subjects.map((s, i) => (
+          <div
+            key={s.key}
+            className="flex items-center justify-between px-4 py-2.5"
+            style={{ borderTop: i > 0 ? `1px solid ${T.line}` : "none" }}
+          >
+            <span className="text-sm">
+              <span style={{ color: T.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }} className="mr-2">{i + 1}.</span>
+              {s.label}
+            </span>
+            <div className="flex gap-1">
+              <button
+                onClick={() => move(i, -1)}
+                disabled={i === 0}
+                className="p-1.5 rounded disabled:opacity-25"
+                style={{ color: T.green }}
+              >
+                <ChevronLeft size={16} style={{ transform: "rotate(90deg)" }} />
+              </button>
+              <button
+                onClick={() => move(i, 1)}
+                disabled={i === subjects.length - 1}
+                className="p-1.5 rounded disabled:opacity-25"
+                style={{ color: T.green }}
+              >
+                <ChevronRight size={16} style={{ transform: "rotate(90deg)" }} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EvaluationPicker({ onSelect }) {
+  return (
+    <div className="rounded-2xl p-8 text-center" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+      <div
+        className="mx-auto mb-5 w-14 h-14 rounded-full flex items-center justify-center"
+        style={{ background: T.goldSoft, color: T.gold }}
+      >
+        <Layers size={24} />
+      </div>
+      <h2 style={{ fontFamily: "'Fraunces', serif" }} className="text-xl font-semibold mb-2">
+        Choix de l'évaluation
+      </h2>
+      <p className="text-sm max-w-md mx-auto mb-6" style={{ color: T.inkSoft }}>
+        Sélectionne l'évaluation active pour insérer tes notes. Tu pourras en changer à tout moment
+        depuis l'en-tête de l'application.
+      </p>
+      <div className="max-w-sm mx-auto space-y-2.5">
+        {EVALUATION_TYPES.map((ev) => (
+          <button
+            key={ev}
+            onClick={() => onSelect(ev)}
+            className="w-full text-left px-4 py-3 rounded-lg text-sm font-medium"
+            style={{ border: `2px solid ${T.goldLine}`, color: T.ink }}
+          >
+            {ev}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function WelcomeScreen({ onStart }) {
   return (
     <div
@@ -951,7 +1068,7 @@ function WelcomeScreen({ onStart }) {
           </div>
           <div className="p-3 rounded-lg" style={{ background: T.goldSoft }}>
             <div className="text-xs font-semibold mb-1" style={{ color: T.gold }}>2. Saisir</div>
-            <div className="text-xs" style={{ color: T.inkSoft }}>3 chiffres par matière</div>
+            <div className="text-xs" style={{ color: T.inkSoft }}>Note + perfectionnement, en un geste</div>
           </div>
           <div className="p-3 rounded-lg" style={{ background: T.greenSoft }}>
             <div className="text-xs font-semibold mb-1" style={{ color: T.green }}>3. Exporter</div>
@@ -1197,9 +1314,9 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
                 type="text"
                 inputMode="numeric"
                 pattern="[0-9]*"
-                maxLength={4}
+                maxLength={7}
                 disabled={absent}
-                placeholder={absent ? "Élève absent" : "3 chiffres (ex: 120 ou 12:2)"}
+                placeholder={absent ? "Élève absent" : "Ex: 14,5 2"}
                 value={displayCode}
                 onChange={(e) => handleCodeChange(idx, s.key, sanitizeCode(e.target.value))}
                 className="w-full text-center py-3 rounded-lg text-2xl font-semibold"
@@ -1211,7 +1328,7 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
               />
               {hasAny && (
                 <div className="text-center text-xs mt-1.5" style={{ color, fontFamily: "'IBM Plex Mono', monospace" }}>
-                  Note {g.obtenue} + Perf. {g.perfectionnement} = <strong>{total}/20</strong>
+                  Note {formatNum(toNum(g.obtenue))} + Perf. {g.perfectionnement} = <strong>{formatNum(total)}/20</strong>
                 </div>
               )}
             </div>
@@ -1349,9 +1466,8 @@ function SubjectTab({ roster, subject, grades, onChangeCode, attendance }) {
       <div className="px-4 py-2.5" style={{ background: T.greenSoft, borderBottom: `1px solid ${T.line}` }}>
         <div className="flex items-center justify-between text-xs mb-1.5" style={{ color: T.green }}>
           <span>
-            Saisis <strong>3 chiffres</strong> : les 2 premiers = note obtenue, le dernier = perfectionnement (0, 1 ou 2 seulement).
-            Exemple : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>120</span> ou{" "}
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>12:2</span> → 12 + 2 = <strong>14</strong>.
+            Saisis la <strong>note obtenue</strong>, un <strong>espace</strong>, puis le <strong>perfectionnement</strong> (0, 1 ou 2).
+            Exemple : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>14,5 2</span> → 14,5 + 2 = <strong>16,5</strong>.
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -1407,9 +1523,9 @@ function SubjectTab({ roster, subject, grades, onChangeCode, attendance }) {
                     type="text"
                     inputMode="numeric"
                     pattern="[0-9]*"
-                    maxLength={4}
+                    maxLength={7}
                     disabled={absent}
-                    placeholder="000"
+                    placeholder="Ex: 14,5 2"
                     value={displayCode}
                     onChange={(e) => handleChange(i, s.matricule, sanitizeCode(e.target.value))}
                     className="w-24 mx-auto block text-center px-2 py-1.5 rounded-md text-base font-semibold"
@@ -1420,7 +1536,7 @@ function SubjectTab({ roster, subject, grades, onChangeCode, attendance }) {
                   {hasAny ? `${g.obtenue} + ${g.perfectionnement}` : "—"}
                 </td>
                 <td className="px-3 py-2 text-center font-semibold" style={{ color, fontFamily: "'IBM Plex Mono', monospace" }}>
-                  {total !== null ? total : "—"}
+                  {total !== null ? formatNum(total) : "—"}
                 </td>
               </tr>
             );
