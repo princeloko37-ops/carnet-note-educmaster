@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight, Moon, Sun, Lock, Unlock, Layers, Share2, BarChart3, AlertTriangle, UserX, UserCheck, Undo2, Plus, X, ArrowUpDown } from "lucide-react";
+import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight, Moon, Sun, Lock, Unlock, Layers, Share2, BarChart3, AlertTriangle, UserX, UserCheck, Undo2, Plus, X, ArrowUpDown, Home } from "lucide-react";
 
 const LIGHT_THEME = {
   paper: "#F3FBF7",
@@ -54,66 +54,52 @@ function codeFromValues(obtenue, perfectionnement) {
   const oNum = toNum(obtenue);
   const pNum = toNum(perfectionnement);
   if (oNum === null && pNum === null) return "";
-  const o = String(oNum ?? 0).replace(".", ",");
-  const p = String(Math.min(2, Math.max(0, Math.round(pNum || 0))));
-  return `${o} ${p}`;
+  const pClamped = Math.min(2, Math.max(0, Math.round(pNum || 0)));
+  if (Number.isInteger(oNum)) {
+    const oPadded = String(Math.max(0, oNum)).padStart(2, "0").slice(-2);
+    return `${oPadded}${pClamped}`;
+  }
+  const oStr = oNum.toFixed(1).replace(".", ",");
+  return `${oStr}${pClamped}`;
 }
 
-// Format: "<note obtenue, entier ou décimal>  <perfectionnement 0/1/2>"
-// Examples: "14,5 2"  "12 0"  "18.5 1"
-const CODE_PATTERN = /^(\d{1,2}(?:[.,]\d{1,2})?)\s+([0-2])$/;
+// Three ways to type a note, all auto-detected — no fixed separator needed:
+//  1) With an explicit separator: "14,5 2"  "12:0"  "18,5;1"
+//  2) Decimal, no separator: "12,502" -> 12,5 + 02   "12,52" -> 12,5 + 2
+//  3) Plain digits, no separator: "120" -> 12 + 0    "1202" -> 12 + 02
+const WITH_SEP_PATTERN = /^(\d{1,2}(?:[.,]\d{1,2})?)[\s:;']+([0-2])$/;
+const DECIMAL_NOSEP_PATTERN = /^(\d{1,2})[.,](\d)([0-2]{1,2})$/;
+const INTEGER_NOSEP_PATTERN = /^(\d{2})([0-2]{1,2})$/;
 
 function parseCode(code) {
   if (!code) return { obtenue: "", perfectionnement: "" };
-  const m = code.trim().match(CODE_PATTERN);
-  if (!m) return { obtenue: "", perfectionnement: "" };
-  return {
-    obtenue: m[1].replace(",", "."),
-    perfectionnement: m[2],
-  };
+  const str = code.trim();
+
+  let m = str.match(WITH_SEP_PATTERN);
+  if (m) {
+    return { obtenue: m[1].replace(",", "."), perfectionnement: m[2] };
+  }
+
+  m = str.match(DECIMAL_NOSEP_PATTERN);
+  if (m) {
+    return { obtenue: `${m[1]}.${m[2]}`, perfectionnement: String(Math.min(2, parseInt(m[3], 10))) };
+  }
+
+  m = str.match(INTEGER_NOSEP_PATTERN);
+  if (m) {
+    return { obtenue: String(parseInt(m[1], 10)), perfectionnement: String(Math.min(2, parseInt(m[2], 10))) };
+  }
+
+  return { obtenue: "", perfectionnement: "" };
 }
 
 function isCodeComplete(code) {
-  return !!code && CODE_PATTERN.test(code.trim());
+  return !!code && parseCode(code).obtenue !== "";
 }
 
-// Lets the person type freely: digits, one decimal separator (, or .),
-// a space, then a single perfectionnement digit (0, 1 or 2).
+// Very permissive while typing: final validity is decided by parseCode/isCodeComplete.
 function sanitizeCode(value) {
-  const filtered = value.replace(/[^0-9.,\s]/g, "");
-  const spaceIdx = filtered.search(/\s/);
-
-  const cleanObtenue = (raw) => {
-    let out = "";
-    let seenSep = false;
-    let intDigits = 0;
-    let decDigits = 0;
-    for (const ch of raw) {
-      if (/[0-9]/.test(ch)) {
-        if (!seenSep) {
-          if (intDigits < 2) {
-            out += ch;
-            intDigits++;
-          }
-        } else if (decDigits < 2) {
-          out += ch;
-          decDigits++;
-        }
-      } else if (/[.,]/.test(ch) && !seenSep && intDigits > 0) {
-        out += ch;
-        seenSep = true;
-      }
-    }
-    return out;
-  };
-
-  if (spaceIdx === -1) {
-    return cleanObtenue(filtered);
-  }
-  const obtenuePart = cleanObtenue(filtered.slice(0, spaceIdx));
-  const rest = filtered.slice(spaceIdx).replace(/\s/g, "");
-  const perf = rest.length > 0 && ["0", "1", "2"].includes(rest[0]) ? rest[0] : "";
-  return perf ? `${obtenuePart} ${perf}` : obtenuePart.length > 0 ? `${obtenuePart} ` : "";
+  return value.replace(/[^0-9.,:;'\s]/g, "").slice(0, 8);
 }
 
 function formatNum(n) {
@@ -187,6 +173,7 @@ export default function CarnetNotes() {
   const [activeId, setActiveId] = useState(null);
   const [showClassSwitcher, setShowClassSwitcher] = useState(false);
   const [showReorder, setShowReorder] = useState(false);
+  const [showWelcomeOverlay, setShowWelcomeOverlay] = useState(false);
 
   const [darkMode, setDarkMode] = useState(() => {
     const dark = typeof window !== "undefined" && localStorage.getItem(DARK_KEY) === "1";
@@ -549,10 +536,12 @@ export default function CarnetNotes() {
     return { wbout, filename };
   };
 
+  const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
   const handleExport = () => {
     if (roster.length === 0) return;
     const { wbout, filename } = buildWorkbook();
-    const blob = new Blob([wbout], { type: "application/octet-stream" });
+    const blob = new Blob([wbout], { type: XLSX_MIME });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -565,17 +554,26 @@ export default function CarnetNotes() {
 
   const handleShare = async () => {
     if (roster.length === 0) return;
-    const { wbout, filename } = buildWorkbook();
-    const blob = new Blob([wbout], { type: "application/octet-stream" });
-    const file = new File([blob], filename, { type: "application/octet-stream" });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try {
+    try {
+      const { wbout, filename } = buildWorkbook();
+      const blob = new Blob([wbout], { type: XLSX_MIME });
+      const file = new File([blob], filename, { type: XLSX_MIME });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: filename, text: `Notes de la classe ${className || ""}` });
-      } catch (e) {
-        // person cancelled the share sheet — nothing to do
+      } else if (navigator.share) {
+        // Some browsers support sharing text/links but not files.
+        alert(
+          "Ce navigateur ne permet pas de partager directement le fichier Excel. Utilise le bouton \"Exporter\" puis partage le fichier téléchargé depuis tes fichiers (WhatsApp, etc.)."
+        );
+      } else {
+        alert(
+          "Le partage direct n'est pas disponible sur ce navigateur (souvent le cas sur PC). Utilise le bouton \"Exporter\" puis partage le fichier téléchargé depuis tes fichiers."
+        );
       }
-    } else {
-      alert("Le partage direct n'est pas disponible sur ce navigateur. Utilise le bouton \"Exporter\" puis partage le fichier téléchargé depuis tes fichiers.");
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // person cancelled the share sheet
+      alert("Le partage a échoué : " + (e && e.message ? e.message : "erreur inconnue") + ". Utilise plutôt le bouton \"Exporter\".");
     }
   };
 
@@ -596,6 +594,17 @@ export default function CarnetNotes() {
     );
   }
 
+  if (showWelcomeOverlay) {
+    return (
+      <div style={{ background: T.paper, minHeight: "100vh", fontFamily: "'IBM Plex Sans', sans-serif" }} className="flex items-center justify-center px-4 py-10">
+        <style>{`@import url('${FONT_LINK}');`}</style>
+        <div className="w-full max-w-lg">
+          <WelcomeScreen onStart={() => setShowWelcomeOverlay(false)} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ background: T.paper, minHeight: "100vh", fontFamily: "'IBM Plex Sans', sans-serif", color: T.ink }}>
       <style>{`@import url('${FONT_LINK}');
@@ -609,9 +618,14 @@ export default function CarnetNotes() {
       <div style={{ background: T.ink, borderBottom: `4px solid ${T.gold}` }} className="px-4 pt-6 pb-5 sm:px-8">
         <div className="max-w-5xl mx-auto flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <p style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }} className="text-xs tracking-widest uppercase mb-1">
+            <button
+              onClick={() => setShowWelcomeOverlay(true)}
+              className="flex items-center gap-1.5 text-xs tracking-widest uppercase mb-1"
+              style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}
+            >
+              <Home size={12} />
               NoteExpress · Import EducMaster
-            </p>
+            </button>
             <input
               value={className}
               onChange={(e) => setClassName(e.target.value)}
@@ -1011,7 +1025,7 @@ function EvaluationPicker({ onSelect }) {
       >
         <Layers size={24} />
       </div>
-      <h2 style={{ fontFamily: "'Fraunces', serif" }} className="text-xl font-semibold mb-2">
+      <h2 style={{ fontFamily: "'Fraunces', serif", color: T.ink }} className="text-2xl font-bold mb-2">
         Choix de l'évaluation
       </h2>
       <p className="text-sm max-w-md mx-auto mb-6" style={{ color: T.inkSoft }}>
@@ -1050,7 +1064,7 @@ function WelcomeScreen({ onStart }) {
         <p className="text-xs tracking-widest uppercase mb-2" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
           Application pour directeurs d'école
         </p>
-        <h1 style={{ fontFamily: "'Fraunces', serif", color: "#FFFFFF" }} className="text-2xl font-semibold">
+        <h1 style={{ fontFamily: "'Fraunces', serif", color: "#FFFFFF" }} className="text-3xl font-bold">
           NoteExpress
         </h1>
       </div>
@@ -1119,7 +1133,7 @@ function ImportScreen({ onFile, fileInputRef }) {
       >
         <Upload size={24} />
       </div>
-      <h2 style={{ fontFamily: "'Fraunces', serif" }} className="text-xl font-semibold mb-2">
+      <h2 style={{ fontFamily: "'Fraunces', serif", color: T.ink }} className="text-2xl font-bold mb-2">
         Importer la liste de la classe
       </h2>
       <p className="text-sm max-w-md mx-auto mb-4" style={{ color: T.inkSoft }}>
@@ -1230,7 +1244,7 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
       {incompleteCount > 0 && (
         <div
-          className="px-4 py-2 flex items-center justify-between gap-2 text-xs"
+          className="px-4 py-2 flex items-center justify-between gap-2 text-sm"
           style={{ background: T.redSoft, color: T.red }}
         >
           <span className="flex items-center gap-1.5">
@@ -1316,7 +1330,7 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
                 pattern="[0-9]*"
                 maxLength={7}
                 disabled={absent}
-                placeholder={absent ? "Élève absent" : "Ex: 14,5 2"}
+                placeholder={absent ? "Élève absent" : "Ex: 1202 ou 12,52"}
                 value={displayCode}
                 onChange={(e) => handleCodeChange(idx, s.key, sanitizeCode(e.target.value))}
                 className="w-full text-center py-3 rounded-lg text-2xl font-semibold"
@@ -1343,12 +1357,12 @@ function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStuden
   const absentCount = roster.filter((s) => attendance[s.matricule] === false).length;
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-      <div className="px-4 py-2 text-xs flex gap-4" style={{ background: T.greenSoft, color: T.green, fontFamily: "'IBM Plex Mono', monospace" }}>
+      <div className="px-4 py-2 text-sm flex gap-4" style={{ background: T.greenSoft, color: T.green, fontFamily: "'IBM Plex Mono', monospace" }}>
         <span>Inscrits : <strong>{roster.length}</strong></span>
         <span>Présents : <strong>{roster.length - absentCount}</strong></span>
         <span style={{ color: absentCount > 0 ? T.red : T.green }}>Absents : <strong>{absentCount}</strong></span>
       </div>
-      <table className="w-full text-sm">
+      <table className="w-full text-base">
         <thead>
           <tr style={{ background: T.goldSoft }}>
             <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }}>Matricule</th>
@@ -1464,10 +1478,11 @@ function SubjectTab({ roster, subject, grades, onChangeCode, attendance }) {
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
       <div className="px-4 py-2.5" style={{ background: T.greenSoft, borderBottom: `1px solid ${T.line}` }}>
-        <div className="flex items-center justify-between text-xs mb-1.5" style={{ color: T.green }}>
+        <div className="flex items-center justify-between text-sm mb-1.5" style={{ color: T.green }}>
           <span>
-            Saisis la <strong>note obtenue</strong>, un <strong>espace</strong>, puis le <strong>perfectionnement</strong> (0, 1 ou 2).
-            Exemple : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>14,5 2</span> → 14,5 + 2 = <strong>16,5</strong>.
+            Tape directement la note suivie du perfectionnement (0, 1 ou 2) — pas besoin d'espace.
+            Exemples : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>1202</span> → 12 + 02 = <strong>14</strong>,
+            {" "}<span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>12,52</span> → 12,5 + 2 = <strong>14,5</strong>.
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -1482,7 +1497,7 @@ function SubjectTab({ roster, subject, grades, onChangeCode, attendance }) {
 
       {missingCount > 0 && (
         <div
-          className="px-4 py-2 flex items-center justify-between gap-2 text-xs"
+          className="px-4 py-2 flex items-center justify-between gap-2 text-sm"
           style={{ background: T.redSoft, color: T.red }}
         >
           <span className="flex items-center gap-1.5">
@@ -1494,7 +1509,7 @@ function SubjectTab({ roster, subject, grades, onChangeCode, attendance }) {
         </div>
       )}
 
-      <table className="w-full text-sm">
+      <table className="w-full text-base">
         <thead>
           <tr style={{ background: T.goldSoft }}>
             <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Élève</th>
@@ -1525,7 +1540,7 @@ function SubjectTab({ roster, subject, grades, onChangeCode, attendance }) {
                     pattern="[0-9]*"
                     maxLength={7}
                     disabled={absent}
-                    placeholder="Ex: 14,5 2"
+                    placeholder="Ex: 1202"
                     value={displayCode}
                     onChange={(e) => handleChange(i, s.matricule, sanitizeCode(e.target.value))}
                     className="w-24 mx-auto block text-center px-2 py-1.5 rounded-md text-base font-semibold"
@@ -1558,14 +1573,14 @@ function RecapTab({ ranking }) {
         className="px-4 py-3 flex flex-wrap items-center justify-between gap-2"
         style={{ background: T.ink, color: "#FFFFFF" }}
       >
-        <span style={{ fontFamily: "'Fraunces', serif" }} className="font-semibold">
+        <span style={{ fontFamily: "'Fraunces', serif" }} className="font-semibold text-lg">
           Classement général
         </span>
-        <span className="text-xs" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
+        <span className="text-sm" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
           {admis} admis sur {total} · seuil de passage : {PASSING_AVERAGE}/20
         </span>
       </div>
-      <table className="w-full text-sm">
+      <table className="w-full text-base">
         <thead>
           <tr style={{ background: T.goldSoft }}>
             <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Rang</th>
@@ -1655,13 +1670,13 @@ function StatsTab({ roster, subjects, grades, attendance }) {
     <div className="space-y-4">
       <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
         <div className="px-4 py-3 flex items-center justify-between" style={{ background: T.ink, color: "#FFFFFF" }}>
-          <span style={{ fontFamily: "'Fraunces', serif" }} className="font-semibold">Statistiques par matière</span>
+          <span style={{ fontFamily: "'Fraunces', serif" }} className="font-semibold text-lg">Statistiques par matière</span>
           <span className="text-xs" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
             {presentRoster.length} élève(s) présent(s)
           </span>
         </div>
         {classAverage !== null && (
-          <div className="px-4 py-2.5 text-xs" style={{ background: T.greenSoft, color: T.green }}>
+          <div className="px-4 py-2.5 text-sm" style={{ background: T.greenSoft, color: T.green }}>
             Moyenne générale de la classe (toutes matières confondues) : <strong>{classAverage.toFixed(2)}/20</strong>
           </div>
         )}
