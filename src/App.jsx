@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight, Moon, Sun, Lock, Unlock, Layers, Share2, BarChart3, AlertTriangle, UserX, UserCheck, Undo2, Plus, X, ArrowUpDown, Home } from "lucide-react";
+import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight, Moon, Sun, Lock, Unlock, Layers, Share2, BarChart3, AlertTriangle, UserX, UserCheck, Undo2, Plus, X, ArrowUpDown, Home, MoreHorizontal } from "lucide-react";
 
 const LIGHT_THEME = {
   paper: "#F3FBF7",
@@ -174,6 +174,7 @@ export default function CarnetNotes() {
   const [activeId, setActiveId] = useState(null);
   const [showClassSwitcher, setShowClassSwitcher] = useState(false);
   const [showReorder, setShowReorder] = useState(false);
+  const [showMorePanel, setShowMorePanel] = useState(false);
   const [showWelcomeOverlay, setShowWelcomeOverlay] = useState(false);
 
   const [darkMode, setDarkMode] = useState(() => {
@@ -655,11 +656,6 @@ export default function CarnetNotes() {
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            {canUndo && roster.length > 0 && (
-              <button onClick={handleUndo} title="Annuler la dernière saisie" className="p-2 rounded-full" style={{ color: T.goldSoft }}>
-                <Undo2 size={19} />
-              </button>
-            )}
             <button
               onClick={() => setShowClassSwitcher((v) => !v)}
               title="Mes classes"
@@ -676,22 +672,6 @@ export default function CarnetNotes() {
                 </span>
               )}
             </button>
-            <button onClick={toggleDarkMode} title="Mode sombre" className="p-2 rounded-full" style={{ color: T.goldSoft }}>
-              {darkMode ? <Sun size={19} /> : <Moon size={19} />}
-            </button>
-            <button
-              onClick={handleLockNow}
-              title={pinSet ? "Verrouiller" : "Définir un code PIN"}
-              className="p-2 rounded-full"
-              style={{ color: T.goldSoft }}
-            >
-              {pinSet ? <Lock size={19} /> : <Unlock size={19} />}
-            </button>
-            {roster.length > 0 && (
-              <button onClick={resetAll} title="Supprimer cette classe" className="p-2 rounded-full" style={{ color: T.goldSoft }}>
-                <Trash2 size={19} />
-              </button>
-            )}
           </div>
         </div>
 
@@ -707,7 +687,7 @@ export default function CarnetNotes() {
         )}
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-8 py-6">
+      <div className={`max-w-5xl mx-auto px-4 sm:px-8 py-6 ${roster.length > 0 && evaluationType && entryModeChosen ? "pb-24" : ""}`}>
         {roster.length === 0 && showWelcome ? (
           <WelcomeScreen onStart={() => setShowWelcome(false)} />
         ) : roster.length === 0 ? (
@@ -724,26 +704,26 @@ export default function CarnetNotes() {
           />
         ) : (
           <>
-            {/* Tabs */}
-            <div className="flex gap-2 overflow-x-auto pb-1 mb-5 -mx-1 px-1">
-              <TabButton active={activeTab === "eleves"} onClick={() => setActiveTab("eleves")} icon={<Users size={15} />}>
-                Élèves
-              </TabButton>
-              <TabButton active={activeTab === "parEleve"} onClick={() => setActiveTab("parEleve")} icon={<ClipboardList size={15} />}>
-                Par élève
-              </TabButton>
-              {subjects.map((s) => (
-                <TabButton key={s.key} active={activeTab === s.key} onClick={() => setActiveTab(s.key)} icon={<PenLine size={15} />}>
-                  {s.label}
+            {/* Contextual sub-navigation */}
+            {activeSubject && (
+              <div className="flex gap-2 overflow-x-auto pb-1 mb-5 -mx-1 px-1">
+                {subjects.map((s) => (
+                  <TabButton key={s.key} active={activeTab === s.key} onClick={() => setActiveTab(s.key)} icon={<PenLine size={15} />}>
+                    {s.label}
+                  </TabButton>
+                ))}
+              </div>
+            )}
+            {(activeTab === "recap" || activeTab === "stats") && (
+              <div className="flex gap-2 mb-5">
+                <TabButton active={activeTab === "recap"} onClick={() => setActiveTab("recap")} icon={<Award size={15} />}>
+                  Classement
                 </TabButton>
-              ))}
-              <TabButton active={activeTab === "recap"} onClick={() => setActiveTab("recap")} icon={<Award size={15} />}>
-                Récapitulatif
-              </TabButton>
-              <TabButton active={activeTab === "stats"} onClick={() => setActiveTab("stats")} icon={<BarChart3 size={15} />}>
-                Statistiques
-              </TabButton>
-            </div>
+                <TabButton active={activeTab === "stats"} onClick={() => setActiveTab("stats")} icon={<BarChart3 size={15} />}>
+                  Statistiques
+                </TabButton>
+              </div>
+            )}
 
             {/* Search + export row */}
             <div className="flex flex-col sm:flex-row gap-3 mb-4">
@@ -759,14 +739,6 @@ export default function CarnetNotes() {
                   className="bg-transparent outline-none w-full text-sm"
                 />
               </div>
-              <button
-                onClick={() => setShowReorder((v) => !v)}
-                title="Réorganiser l'ordre des matières"
-                className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg font-medium text-sm shrink-0"
-                style={{ background: T.card, color: T.inkSoft, border: `1px solid ${T.line}` }}
-              >
-                <ArrowUpDown size={16} />
-              </button>
               <button
                 onClick={handleExport}
                 className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm shrink-0"
@@ -828,6 +800,51 @@ export default function CarnetNotes() {
           </>
         )}
       </div>
+
+      {roster.length > 0 && evaluationType && entryModeChosen && (
+        <BottomNav
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          firstSubjectKey={subjects[0]?.key}
+          isSubjectActive={!!activeSubject}
+          onMore={() => setShowMorePanel(true)}
+        />
+      )}
+
+      {showMorePanel && (
+        <MorePanel
+          onClose={() => setShowMorePanel(false)}
+          classesCount={classesList.length}
+          onOpenClasses={() => {
+            setShowMorePanel(false);
+            setShowClassSwitcher(true);
+          }}
+          onReorder={() => {
+            setShowMorePanel(false);
+            setShowReorder(true);
+          }}
+          darkMode={darkMode}
+          onToggleDark={toggleDarkMode}
+          pinSet={pinSet}
+          onLock={() => {
+            setShowMorePanel(false);
+            handleLockNow();
+          }}
+          canUndo={canUndo}
+          onUndo={() => {
+            setShowMorePanel(false);
+            handleUndo();
+          }}
+          onDeleteClass={() => {
+            setShowMorePanel(false);
+            resetAll();
+          }}
+          onGoHome={() => {
+            setShowMorePanel(false);
+            setShowWelcomeOverlay(true);
+          }}
+        />
+      )}
     </div>
   );
 
@@ -1017,6 +1034,109 @@ function ReorderPanel({ subjects, setSubjects, onClose }) {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function BottomNav({ activeTab, setActiveTab, firstSubjectKey, isSubjectActive, onMore }) {
+  const items = [
+    { key: "eleves", label: "Élèves", icon: Users },
+    { key: "parEleve", label: "Saisie", icon: ClipboardList },
+    { key: "matieres", label: "Matières", icon: PenLine },
+    { key: "recap", label: "Classement", icon: Award },
+  ];
+
+  const isActive = (key) => {
+    if (key === "matieres") return isSubjectActive;
+    if (key === "recap") return activeTab === "recap" || activeTab === "stats";
+    return activeTab === key;
+  };
+
+  const handleClick = (key) => {
+    if (key === "matieres") {
+      setActiveTab(firstSubjectKey || "eleves");
+    } else {
+      setActiveTab(key);
+    }
+  };
+
+  return (
+    <div
+      className="fixed bottom-0 left-0 right-0 flex items-stretch z-20"
+      style={{ background: T.ink, borderTop: `1px solid rgba(255,255,255,0.08)` }}
+    >
+      {items.map(({ key, label, icon: Icon }) => {
+        const active = isActive(key);
+        return (
+          <button
+            key={key}
+            onClick={() => handleClick(key)}
+            className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5"
+            style={{ color: active ? "#FFFFFF" : T.inkSoft }}
+          >
+            <Icon size={20} strokeWidth={active ? 2.4 : 2} />
+            <span className="text-[11px] font-medium">{label}</span>
+          </button>
+        );
+      })}
+      <button
+        onClick={onMore}
+        className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5"
+        style={{ color: T.inkSoft }}
+      >
+        <MoreHorizontal size={20} />
+        <span className="text-[11px] font-medium">Plus</span>
+      </button>
+    </div>
+  );
+}
+
+function MorePanel({
+  onClose,
+  classesCount,
+  onOpenClasses,
+  onReorder,
+  darkMode,
+  onToggleDark,
+  pinSet,
+  onLock,
+  canUndo,
+  onUndo,
+  onDeleteClass,
+  onGoHome,
+}) {
+  const Row = ({ icon: Icon, label, onClick, danger, disabled }) => (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="w-full flex items-center gap-3 px-5 py-3.5 text-left disabled:opacity-30"
+      style={{ borderTop: `1px solid ${T.line}` }}
+    >
+      <Icon size={18} style={{ color: danger ? T.red : T.green }} />
+      <span className="text-sm font-medium" style={{ color: danger ? T.red : T.ink }}>{label}</span>
+    </button>
+  );
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-end" style={{ background: "rgba(11,74,58,0.4)" }} onClick={onClose}>
+      <div
+        className="w-full rounded-t-2xl overflow-hidden max-w-5xl mx-auto"
+        style={{ background: T.card }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-3.5" style={{ background: T.greenSoft }}>
+          <span className="text-sm font-semibold" style={{ color: T.green }}>Plus d'options</span>
+          <button onClick={onClose} style={{ color: T.green }}><X size={18} /></button>
+        </div>
+        <Row icon={Home} label="Retour à l'accueil" onClick={onGoHome} />
+        <Row icon={Layers} label={`Mes classes${classesCount > 1 ? ` (${classesCount})` : ""}`} onClick={onOpenClasses} />
+        <Row icon={ArrowUpDown} label="Réorganiser les matières" onClick={onReorder} />
+        <Row icon={darkMode ? Sun : Moon} label={darkMode ? "Mode clair" : "Mode sombre"} onClick={onToggleDark} />
+        <Row icon={pinSet ? Lock : Unlock} label={pinSet ? "Verrouiller maintenant" : "Définir un code PIN"} onClick={onLock} />
+        <Row icon={Undo2} label="Annuler la dernière saisie" onClick={onUndo} disabled={!canUndo} />
+        <Row icon={Trash2} label="Supprimer cette classe" onClick={onDeleteClass} danger />
+        <div style={{ height: "env(safe-area-inset-bottom, 8px)" }} />
       </div>
     </div>
   );
