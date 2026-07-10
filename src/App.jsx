@@ -161,6 +161,7 @@ export default function CarnetNotes() {
   const [attendance, setAttendance] = useState({}); // matricule -> false means absent (absence of key = present)
   const [className, setClassName] = useState("");
   const [evaluationType, setEvaluationType] = useState("");
+  const [entryModeChosen, setEntryModeChosen] = useState(false);
   const [activeTab, setActiveTab] = useState("parEleve");
   const [studentIndex, setStudentIndex] = useState(0);
   const [showWelcome, setShowWelcome] = useState(true);
@@ -219,6 +220,8 @@ export default function CarnetNotes() {
                 subjects: legacy.subjects || [],
                 grades: legacy.grades || {},
                 attendance: {},
+                evaluationType: legacy.evaluationType || EVALUATION_TYPES[0],
+                entryModeChosen: true,
                 updatedAt: Date.now(),
               },
             ];
@@ -237,6 +240,7 @@ export default function CarnetNotes() {
         setAttendance(active.attendance || {});
         setClassName(active.className || "");
         setEvaluationType(active.evaluationType || "");
+        setEntryModeChosen(active.entryModeChosen === undefined ? true : active.entryModeChosen);
         setActiveTab("parEleve");
         setShowWelcome(false);
       }
@@ -259,7 +263,7 @@ export default function CarnetNotes() {
           const others = prev.filter((c) => c.id !== activeId);
           const updated = [
             ...others,
-            { id: activeId, className, evaluationType, roster, subjects, grades, attendance, updatedAt: Date.now() },
+            { id: activeId, className, evaluationType, entryModeChosen, roster, subjects, grades, attendance, updatedAt: Date.now() },
           ];
           localStorage.setItem(CLASSES_KEY, JSON.stringify(updated));
           localStorage.setItem(ACTIVE_KEY, activeId);
@@ -271,7 +275,7 @@ export default function CarnetNotes() {
       }
     }, 700);
     return () => clearTimeout(saveTimer.current);
-  }, [roster, subjects, grades, attendance, className, evaluationType, activeId, loaded]);
+  }, [roster, subjects, grades, attendance, className, evaluationType, entryModeChosen, activeId, loaded]);
 
   const toggleDarkMode = () => {
     setDarkMode((prev) => {
@@ -292,9 +296,10 @@ export default function CarnetNotes() {
     setAttendance({});
     setClassName("");
     setEvaluationType("");
+    setEntryModeChosen(false);
     setActiveTab("parEleve");
     setStudentIndex(0);
-    setShowWelcome(false);
+    setShowWelcome(true);
     setShowClassSwitcher(false);
     undoStack.current = [];
     setCanUndo(false);
@@ -310,6 +315,7 @@ export default function CarnetNotes() {
     setAttendance(rec.attendance || {});
     setClassName(rec.className || "");
     setEvaluationType(rec.evaluationType || "");
+    setEntryModeChosen(rec.entryModeChosen === undefined ? true : rec.entryModeChosen);
     setActiveTab("parEleve");
     setStudentIndex(0);
     setShowClassSwitcher(false);
@@ -708,6 +714,14 @@ export default function CarnetNotes() {
           <ImportScreen onFile={handleFile} fileInputRef={fileInputRef} />
         ) : !evaluationType ? (
           <EvaluationPicker onSelect={setEvaluationType} />
+        ) : !entryModeChosen ? (
+          <EntryModePicker
+            firstSubjectKey={subjects[0]?.key}
+            onSelect={(tab) => {
+              setActiveTab(tab);
+              setEntryModeChosen(true);
+            }}
+          />
         ) : (
           <>
             {/* Tabs */}
@@ -752,14 +766,6 @@ export default function CarnetNotes() {
                 style={{ background: T.card, color: T.inkSoft, border: `1px solid ${T.line}` }}
               >
                 <ArrowUpDown size={16} />
-              </button>
-              <button
-                onClick={handleShare}
-                className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm shrink-0"
-                style={{ background: T.greenSoft, color: T.green, border: `1px solid ${T.goldLine}` }}
-              >
-                <Share2 size={16} />
-                Partager
               </button>
               <button
                 onClick={handleExport}
@@ -1016,6 +1022,47 @@ function ReorderPanel({ subjects, setSubjects, onClose }) {
   );
 }
 
+function EntryModePicker({ onSelect, firstSubjectKey }) {
+  return (
+    <div className="rounded-2xl p-8 text-center" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+      <div
+        className="mx-auto mb-5 w-14 h-14 rounded-full flex items-center justify-center"
+        style={{ background: T.goldSoft, color: T.gold }}
+      >
+        <ClipboardList size={24} />
+      </div>
+      <h2 style={{ fontFamily: "'Fraunces', serif", color: T.ink }} className="text-2xl font-bold mb-2">
+        Format de saisie
+      </h2>
+      <p className="text-sm max-w-md mx-auto mb-6" style={{ color: T.inkSoft }}>
+        Comment préfères-tu saisir les notes ? Tu pourras changer d'avis à tout moment depuis les onglets.
+      </p>
+      <div className="max-w-sm mx-auto space-y-3">
+        <button
+          onClick={() => onSelect("parEleve")}
+          className="w-full text-left px-5 py-4 rounded-xl"
+          style={{ border: `2px solid ${T.goldLine}` }}
+        >
+          <div className="font-semibold mb-1" style={{ color: T.ink }}>Par élève</div>
+          <div className="text-sm" style={{ color: T.inkSoft }}>
+            Saisis toutes les matières d'un élève avant de passer au suivant.
+          </div>
+        </button>
+        <button
+          onClick={() => onSelect(firstSubjectKey || "eleves")}
+          className="w-full text-left px-5 py-4 rounded-xl"
+          style={{ border: `2px solid ${T.goldLine}` }}
+        >
+          <div className="font-semibold mb-1" style={{ color: T.ink }}>Par matière</div>
+          <div className="text-sm" style={{ color: T.inkSoft }}>
+            Saisis une matière pour tous les élèves, puis passe à la matière suivante.
+          </div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EvaluationPicker({ onSelect }) {
   return (
     <div className="rounded-2xl p-8 text-center" style={{ background: T.card, border: `1px solid ${T.line}` }}>
@@ -1062,7 +1109,7 @@ function WelcomeScreen({ onStart }) {
           <span className="text-2xl font-bold" style={{ color: T.ink }}>NE</span>
         </div>
         <p className="text-xs tracking-widest uppercase mb-2" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
-          Application pour directeurs d'école
+          L'application qui facilite la saisie des notes
         </p>
         <h1 style={{ fontFamily: "'Fraunces', serif", color: "#FFFFFF" }} className="text-3xl font-bold">
           NoteExpress
@@ -1477,38 +1524,6 @@ function SubjectTab({ roster, subject, grades, onChangeCode, attendance }) {
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-      <div className="px-4 py-2.5" style={{ background: T.greenSoft, borderBottom: `1px solid ${T.line}` }}>
-        <div className="flex items-center justify-between text-sm mb-1.5" style={{ color: T.green }}>
-          <span>
-            Tape directement la note suivie du perfectionnement (0, 1 ou 2) — pas besoin d'espace.
-            Exemples : <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>1202</span> → 12 + 02 = <strong>14</strong>,
-            {" "}<span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>12,52</span> → 12,5 + 2 = <strong>14,5</strong>.
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: T.goldLine }}>
-            <div className="h-full rounded-full" style={{ width: `${pct}%`, background: T.green }} />
-          </div>
-          <span className="text-xs font-semibold whitespace-nowrap" style={{ color: T.green, fontFamily: "'IBM Plex Mono', monospace" }}>
-            {doneCount}/{presentRoster.length}
-          </span>
-        </div>
-      </div>
-
-      {missingCount > 0 && (
-        <div
-          className="px-4 py-2 flex items-center justify-between gap-2 text-sm"
-          style={{ background: T.redSoft, color: T.red }}
-        >
-          <span className="flex items-center gap-1.5">
-            <AlertTriangle size={14} /> {missingCount} note(s) manquante(s)
-          </span>
-          <button onClick={goToFirstMissing} className="underline font-semibold whitespace-nowrap">
-            Aller à la première
-          </button>
-        </div>
-      )}
-
       <table className="w-full text-base">
         <thead>
           <tr style={{ background: T.goldSoft }}>
