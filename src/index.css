@@ -3,11 +3,11 @@
 @tailwind utilities;
 
 html {
-  font-size: 19px;
+  font-size: 17px;
 }
 
 @media (max-width: 480px) {
   html {
-    font-size: 18px;
+    font-size: 15.5px;
   }
 }

@@ -175,6 +175,7 @@ export default function CarnetNotes() {
   const [showClassSwitcher, setShowClassSwitcher] = useState(false);
   const [showReorder, setShowReorder] = useState(false);
   const [showMorePanel, setShowMorePanel] = useState(false);
+  const [showModePicker, setShowModePicker] = useState(false);
   const [showWelcomeOverlay, setShowWelcomeOverlay] = useState(false);
 
   const [darkMode, setDarkMode] = useState(() => {
@@ -612,6 +613,24 @@ export default function CarnetNotes() {
     );
   }
 
+  if (showModePicker) {
+    return (
+      <div style={{ background: T.paper, minHeight: "100vh", fontFamily: "'IBM Plex Sans', sans-serif" }} className="flex items-center justify-center px-4 py-10">
+        <style>{`@import url('${FONT_LINK}');`}</style>
+        <div className="w-full max-w-lg">
+          <EntryModePicker
+            firstSubjectKey={subjects[0]?.key}
+            onBack={() => setShowModePicker(false)}
+            onSelect={(tab) => {
+              setActiveTab(tab);
+              setShowModePicker(false);
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ background: T.paper, minHeight: "100vh", fontFamily: "'IBM Plex Sans', sans-serif", color: T.ink }}>
       <style>{`@import url('${FONT_LINK}');
@@ -691,9 +710,9 @@ export default function CarnetNotes() {
         {roster.length === 0 && showWelcome ? (
           <WelcomeScreen onStart={() => setShowWelcome(false)} />
         ) : roster.length === 0 ? (
-          <ImportScreen onFile={handleFile} fileInputRef={fileInputRef} />
+          <ImportScreen onFile={handleFile} fileInputRef={fileInputRef} onBack={() => setShowWelcome(true)} />
         ) : !evaluationType ? (
-          <EvaluationPicker onSelect={setEvaluationType} />
+          <EvaluationPicker onSelect={setEvaluationType} onBack={() => setShowWelcome(true)} />
         ) : !entryModeChosen ? (
           <EntryModePicker
             firstSubjectKey={subjects[0]?.key}
@@ -701,6 +720,7 @@ export default function CarnetNotes() {
               setActiveTab(tab);
               setEntryModeChosen(true);
             }}
+            onBack={() => setEvaluationType("")}
           />
         ) : (
           <>
@@ -822,6 +842,10 @@ export default function CarnetNotes() {
           onReorder={() => {
             setShowMorePanel(false);
             setShowReorder(true);
+          }}
+          onChangeMode={() => {
+            setShowMorePanel(false);
+            setShowModePicker(true);
           }}
           darkMode={darkMode}
           onToggleDark={toggleDarkMode}
@@ -1097,6 +1121,7 @@ function MorePanel({
   classesCount,
   onOpenClasses,
   onReorder,
+  onChangeMode,
   darkMode,
   onToggleDark,
   pinSet,
@@ -1132,6 +1157,7 @@ function MorePanel({
         <Row icon={Home} label="Retour à l'accueil" onClick={onGoHome} />
         <Row icon={Layers} label={`Mes classes${classesCount > 1 ? ` (${classesCount})` : ""}`} onClick={onOpenClasses} />
         <Row icon={ArrowUpDown} label="Réorganiser les matières" onClick={onReorder} />
+        <Row icon={ClipboardList} label="Changer le mode de saisie par défaut" onClick={onChangeMode} />
         <Row icon={darkMode ? Sun : Moon} label={darkMode ? "Mode clair" : "Mode sombre"} onClick={onToggleDark} />
         <Row icon={pinSet ? Lock : Unlock} label={pinSet ? "Verrouiller maintenant" : "Définir un code PIN"} onClick={onLock} />
         <Row icon={Undo2} label="Annuler la dernière saisie" onClick={onUndo} disabled={!canUndo} />
@@ -1142,9 +1168,12 @@ function MorePanel({
   );
 }
 
-function EntryModePicker({ onSelect, firstSubjectKey }) {
+function EntryModePicker({ onSelect, firstSubjectKey, onBack }) {
   return (
     <div className="rounded-2xl p-8 text-center" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+      <button onClick={onBack} className="flex items-center gap-1 text-sm font-medium mb-4" style={{ color: T.inkSoft }}>
+        <ChevronLeft size={16} /> Retour
+      </button>
       <div
         className="mx-auto mb-5 w-14 h-14 rounded-full flex items-center justify-center"
         style={{ background: T.goldSoft, color: T.gold }}
@@ -1183,9 +1212,12 @@ function EntryModePicker({ onSelect, firstSubjectKey }) {
   );
 }
 
-function EvaluationPicker({ onSelect }) {
+function EvaluationPicker({ onSelect, onBack }) {
   return (
     <div className="rounded-2xl p-8 text-center" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+      <button onClick={onBack} className="flex items-center gap-1 text-sm font-medium mb-4" style={{ color: T.inkSoft }}>
+        <ChevronLeft size={16} /> Retour
+      </button>
       <div
         className="mx-auto mb-5 w-14 h-14 rounded-full flex items-center justify-center"
         style={{ background: T.goldSoft, color: T.gold }}
@@ -1272,7 +1304,7 @@ function WelcomeScreen({ onStart }) {
   );
 }
 
-function ImportScreen({ onFile, fileInputRef }) {
+function ImportScreen({ onFile, fileInputRef, onBack }) {
   const [dragOver, setDragOver] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   return (
@@ -1294,6 +1326,9 @@ function ImportScreen({ onFile, fileInputRef }) {
         border: `2px dashed ${dragOver ? T.gold : T.goldLine}`,
       }}
     >
+      <button onClick={onBack} className="flex items-center gap-1 text-sm font-medium mb-4" style={{ color: T.inkSoft }}>
+        <ChevronLeft size={16} /> Retour
+      </button>
       <div
         className="mx-auto mb-5 w-14 h-14 rounded-full flex items-center justify-center"
         style={{ background: T.goldSoft, color: T.gold }}
@@ -1409,19 +1444,6 @@ function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex,
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-      {incompleteCount > 0 && (
-        <div
-          className="px-4 py-2 flex items-center justify-between gap-2 text-sm"
-          style={{ background: T.redSoft, color: T.red }}
-        >
-          <span className="flex items-center gap-1.5">
-            <AlertTriangle size={14} /> {incompleteCount} élève(s) avec des notes manquantes
-          </span>
-          <button onClick={goToNextIncomplete} className="underline font-semibold whitespace-nowrap">
-            Aller au prochain
-          </button>
-        </div>
-      )}
       <div
         className="px-4 py-3 flex items-center justify-between gap-2"
         style={{ background: T.ink, color: "#FFFFFF" }}
@@ -1532,9 +1554,7 @@ function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStuden
       <table className="w-full text-base">
         <thead>
           <tr style={{ background: T.goldSoft }}>
-            <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }}>Matricule</th>
-            <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Nom</th>
-            <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Prénoms</th>
+            <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Élève</th>
             <th className="text-right px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Moyenne</th>
             <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Présence</th>
             <th className="px-3 py-2"></th>
@@ -1546,9 +1566,10 @@ function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStuden
             const absent = attendance[s.matricule] === false;
             return (
               <tr key={s.matricule} style={{ borderTop: `1px solid ${T.line}`, background: absent ? T.redSoft : i % 2 ? T.paper : T.card }}>
-                <td className="px-3 py-2" style={{ fontFamily: "'IBM Plex Mono', monospace", color: T.inkSoft }}>{s.matricule}</td>
-                <td className="px-3 py-2 font-medium">{s.nom}</td>
-                <td className="px-3 py-2">{s.prenoms}</td>
+                <td className="px-3 py-2">
+                  <div className="font-medium">{s.nom} {s.prenoms}</div>
+                  <div className="text-xs" style={{ fontFamily: "'IBM Plex Mono', monospace", color: T.inkSoft }}>{s.matricule}</div>
+                </td>
                 <td className="px-3 py-2 text-right" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
                   {absent ? "—" : r?.moyenne !== null && r?.moyenne !== undefined ? r.moyenne.toFixed(2) : "—"}
                 </td>
@@ -1572,7 +1593,7 @@ function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStuden
           })}
           {roster.length === 0 && (
             <tr>
-              <td colSpan={6} className="px-3 py-6 text-center text-sm" style={{ color: T.inkSoft }}>
+              <td colSpan={4} className="px-3 py-6 text-center text-sm" style={{ color: T.inkSoft }}>
                 Aucun élève ne correspond à la recherche.
               </td>
             </tr>
