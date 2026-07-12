@@ -1,14 +1,14 @@
 {
-  "name": "NoteExpress — EducMaster",
+  "name": "NoteExpress",
   "short_name": "NoteExpress",
-  "description": "Saisie ultra-rapide des notes et export EducMaster pour les écoles primaires du Bénin.",
-  "start_url": ".",
-  "scope": ".",
+  "description": "Saisie rapide des notes EducMaster pour enseignants et directeurs d'école.",
+  "start_url": "/",
   "display": "standalone",
-  "background_color": "#F3FBF7",
-  "theme_color": "#0B4A3A",
+  "background_color": "#F6F4EF",
+  "theme_color": "#14213D",
+  "orientation": "portrait",
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

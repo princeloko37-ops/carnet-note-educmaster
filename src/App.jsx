@@ -1,1880 +1,1601 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import * as XLSX from "xlsx";
-import { Upload, Download, Trash2, Search, Users, ClipboardList, Award, PenLine, RotateCcw, Check, ChevronLeft, ChevronRight, Moon, Sun, Lock, Unlock, Layers, Share2, BarChart3, AlertTriangle, UserX, UserCheck, Undo2, Plus, X, ArrowUpDown, Home, MoreHorizontal } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import * as XLSX from 'xlsx'
+import {
+  Users, Edit3, BookOpen, Trophy, MoreHorizontal, Lock, Moon, Sun, Plus,
+  Trash2, ArrowUp, ArrowDown, Upload, Download, ChevronRight, X, Check,
+  RotateCcw, Home, KeyRound, ShieldCheck, Copy, AlertCircle, BarChart3,
+  LogOut, Pencil, ChevronLeft, CircleCheck, CircleX, Layers, ClipboardList,
+} from 'lucide-react'
 
-const LIGHT_THEME = {
-  paper: "#F3FBF7",
-  ink: "#0B4A3A",
-  inkSoft: "#5B7A70",
-  gold: "#12946B",
-  goldSoft: "#DCF2E9",
-  goldLine: "#BFE3D3",
-  green: "#0E7C5A",
-  greenSoft: "#E3F5EE",
-  red: "#B23A32",
-  redSoft: "#F5E4E1",
-  card: "#FFFFFF",
-  line: "#D8ECE4",
-};
+/* ============================================================================
+   CONSTANTES MÉTIER
+   ========================================================================== */
 
-const DARK_THEME = {
-  paper: "#0E1B16",
-  ink: "#EAF7F1",
-  inkSoft: "#9BB5AC",
-  gold: "#2FBE8B",
-  goldSoft: "#1B3229",
-  goldLine: "#294B3E",
-  green: "#3ECF98",
-  greenSoft: "#153328",
-  red: "#E17A72",
-  redSoft: "#3A2220",
-  card: "#152420",
-  line: "#25392F",
-};
+const EVALUATION_TYPES = [
+  'Évaluation Formative 1',
+  'Évaluation Sommative 1',
+  'Évaluation Sommative 2',
+  'Évaluation Sommative 3',
+]
 
-// Mutated in place so every component reading T.xxx picks up the active
-// theme's colors as soon as the app re-renders (triggered by the dark-mode toggle).
-const T = { ...LIGHT_THEME };
-function applyTheme(mode) {
-  Object.assign(T, mode === "dark" ? DARK_THEME : LIGHT_THEME);
-}
+const PASSING_AVERAGE = 9 // seuil admis / non admis sur la moyenne générale
+const SUBJECT_PASS = 10 // seuil de réussite par matière
 
-const FONT_LINK = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap";
+const APP_NAME = 'NoteExpress'
+const APP_VERSION = '2.0.0'
+const CACHE_HINT = 'v2' // à faire correspondre avec public/sw.js -> CACHE_NAME
 
-const CLASSES_KEY = "carnet-notes:classes";
-const ACTIVE_KEY = "carnet-notes:activeId";
-const LEGACY_KEY = "carnet-notes:current";
-const PIN_KEY = "carnet-notes:pin";
-const DARK_KEY = "carnet-notes:dark";
-const PASSING_AVERAGE = 9; // moyenne générale minimale pour passer en classe supérieure
-const SUBJECT_PASS = 10; // seuil de réussite par matière (sur 20)
-const EVALUATION_TYPES = ["Évaluation Formative 1", "Évaluation Sommative 1", "Évaluation Sommative 2", "Évaluation Sommative 3"];
+const LICENSE_SALT = 'NX-EDUCMASTER-BENIN'
+const ADMIN_PASSCODE = '379246' // code réservé à Prince pour générer des licences — à changer si besoin
 
-function codeFromValues(obtenue, perfectionnement) {
-  const oNum = toNum(obtenue);
-  const pNum = toNum(perfectionnement);
-  if (oNum === null && pNum === null) return "";
-  const pClamped = Math.min(2, Math.max(0, Math.round(pNum || 0)));
-  if (Number.isInteger(oNum)) {
-    const oPadded = String(Math.max(0, oNum)).padStart(2, "0").slice(-2);
-    return `${oPadded}${pClamped}`;
-  }
-  const oStr = oNum.toFixed(1).replace(".", ",");
-  return `${oStr}${pClamped}`;
-}
+/* ============================================================================
+   CLÉS LOCALSTORAGE
+   ========================================================================== */
 
-// Three ways to type a note, all auto-detected — no fixed separator needed:
-//  1) With an explicit separator: "14,5 2"  "12:0"  "18,5;1"
-//  2) Decimal, no separator: "12,502" -> 12,5 + 02   "12,52" -> 12,5 + 2
-//  3) Plain digits, no separator: "120" -> 12 + 0    "1202" -> 12 + 02
-const WITH_SEP_PATTERN = /^(\d{1,2}(?:[.,]\d{1,2})?)[\s:;']+([0-2])$/;
-const DECIMAL_NOSEP_PATTERN = /^(\d{1,2})[.,](\d)([0-2]{1,2})$/;
-const INTEGER_NOSEP_PATTERN = /^(\d{2})([0-2]{1,2})$/;
+const LS_CLASSES = 'noteexpress:classes'
+const LS_ACTIVE = 'noteexpress:activeId'
+const LS_LEGACY = 'carnet-notes:current' // migration depuis l'ancienne app
+const LS_PIN = 'noteexpress:pin'
+const LS_DARK = 'noteexpress:dark'
+const LS_LICENSE = 'noteexpress:license'
+const LS_DEFAULT_MODE = 'noteexpress:defaultEntryMode'
 
-function parseCode(code) {
-  if (!code) return { obtenue: "", perfectionnement: "" };
-  const str = code.trim();
+/* ============================================================================
+   HELPERS GÉNÉRAUX
+   ========================================================================== */
 
-  let m = str.match(WITH_SEP_PATTERN);
-  if (m) {
-    return { obtenue: m[1].replace(",", "."), perfectionnement: m[2] };
-  }
-
-  m = str.match(DECIMAL_NOSEP_PATTERN);
-  if (m) {
-    return { obtenue: `${m[1]}.${m[2]}`, perfectionnement: String(Math.min(2, parseInt(m[3], 10))) };
-  }
-
-  m = str.match(INTEGER_NOSEP_PATTERN);
-  if (m) {
-    return { obtenue: String(parseInt(m[1], 10)), perfectionnement: String(Math.min(2, parseInt(m[2], 10))) };
-  }
-
-  return { obtenue: "", perfectionnement: "" };
-}
-
-function isCodeComplete(code) {
-  return !!code && parseCode(code).obtenue !== "";
-}
-
-// Very permissive while typing: final validity is decided by parseCode/isCodeComplete.
-function sanitizeCode(value) {
-  return value.replace(/[^0-9.,:;'\s]/g, "").slice(0, 8);
+function uid(prefix = 'id') {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
 function formatNum(n) {
-  if (n === null || n === undefined || isNaN(n)) return "—";
-  return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(".", ",");
-}
-
-function cleanMatricule(v) {
-  if (v === null || v === undefined) return "";
-  return String(v).replace(/^'/, "").trim();
+  if (n === null || n === undefined || n === '' || Number.isNaN(n)) return ''
+  const rounded = Math.round(n * 100) / 100
+  return rounded.toString().replace('.', ',')
 }
 
 function toNum(v) {
-  if (v === "" || v === null || v === undefined) return null;
-  const n = parseFloat(String(v).replace(",", "."));
-  return isNaN(n) ? null : n;
+  if (v === null || v === undefined || v === '') return 0
+  if (typeof v === 'number') return Number.isNaN(v) ? 0 : v
+  const cleaned = String(v).trim().replace(',', '.')
+  const n = parseFloat(cleaned)
+  return Number.isNaN(n) ? 0 : n
 }
 
-function computeRanking(roster, subjects, grades, attendance = {}) {
-  const list = roster.map((stu) => {
-    const absent = attendance[stu.matricule] === false;
-    let sum = 0;
-    let count = 0;
-    subjects.forEach((s) => {
-      const g = grades[stu.matricule]?.[s.key];
-      if (g && (g.obtenue !== "" && g.obtenue !== undefined || g.perfectionnement !== "" && g.perfectionnement !== undefined)) {
-        const o = toNum(g.obtenue) || 0;
-        const p = toNum(g.perfectionnement) || 0;
-        sum += o + p;
-        count += 1;
-      }
-    });
-    const moyenne = !absent && count > 0 ? sum / count : null;
-    return { ...stu, moyenne, count, absent };
-  });
-
-  const withMoy = list.filter((s) => s.moyenne !== null).sort((a, b) => b.moyenne - a.moyenne);
-  const withoutMoy = list.filter((s) => s.moyenne === null);
-
-  let rang = 0;
-  let prevMoy = null;
-  withMoy.forEach((s, i) => {
-    const position = i + 1;
-    if (s.moyenne !== prevMoy) {
-      rang = position;
-      prevMoy = s.moyenne;
-    }
-    s.rang = rang;
-  });
-  withoutMoy.forEach((s) => (s.rang = null));
-
-  return [...withMoy, ...withoutMoy];
+function cleanMatricule(v) {
+  // Certains exports EducMaster stockent le matricule avec une apostrophe
+  // collée au début (ex: "'2141025034359") — on l'enlève pour l'affichage
+  // et les clés internes, mais rawMatricule garde la valeur d'origine pour
+  // que l'export réimporte exactement comme EducMaster l'attend.
+  return String(v ?? '').trim().replace(/^['\u2018\u2019]/, '')
 }
 
-export default function CarnetNotes() {
-  const [roster, setRoster] = useState([]);
-  const [subjects, setSubjects] = useState([]);
-  const [grades, setGrades] = useState({});
-  const [attendance, setAttendance] = useState({}); // matricule -> false means absent (absence of key = present)
-  const [className, setClassName] = useState("");
-  const [evaluationType, setEvaluationType] = useState("");
-  const [entryModeChosen, setEntryModeChosen] = useState(false);
-  const [activeTab, setActiveTab] = useState("parEleve");
-  const [studentIndex, setStudentIndex] = useState(0);
-  const [showWelcome, setShowWelcome] = useState(true);
-  const [search, setSearch] = useState("");
-  const [loaded, setLoaded] = useState(false);
-  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
-  const [newStudent, setNewStudent] = useState({ matricule: "", nom: "", prenoms: "" });
+function normalizeLabel(s) {
+  return String(s ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
 
-  const [classesList, setClassesList] = useState([]); // catalog of all saved classes (metadata + snapshot)
-  const [activeId, setActiveId] = useState(null);
-  const [showClassSwitcher, setShowClassSwitcher] = useState(false);
-  const [showReorder, setShowReorder] = useState(false);
-  const [showMorePanel, setShowMorePanel] = useState(false);
-  const [showModePicker, setShowModePicker] = useState(false);
-  const [showWelcomeOverlay, setShowWelcomeOverlay] = useState(false);
+/* ============================================================================
+   PARSING DU CODE DE SAISIE (obtenue + perfectionnement en un seul champ)
+   Formats acceptés :
+     "1202"   -> 12 + 02 = 14 (entier, sans séparateur)
+     "120"    -> 12 + 0  = 12
+     "12,52"  -> 12,5 + 2 = 14,5 (décimal, sans séparateur)
+     "14,5 2" / "12:0" / "18,5;1" (séparateur explicite espace / : / ; / ')
+   ========================================================================== */
 
-  const [darkMode, setDarkMode] = useState(() => {
-    const dark = typeof window !== "undefined" && localStorage.getItem(DARK_KEY) === "1";
-    applyTheme(dark ? "dark" : "light");
-    return dark;
-  });
-  const [, forceThemeRerender] = useState(0);
+function sanitizeCode(raw) {
+  return String(raw ?? '').replace(/[^0-9,.\s:;']/g, '')
+}
 
-  const [pinSet, setPinSet] = useState(() => typeof window !== "undefined" && !!localStorage.getItem(PIN_KEY));
-  const [locked, setLocked] = useState(() => typeof window !== "undefined" && !!localStorage.getItem(PIN_KEY));
+function parseCode(raw) {
+  const s = sanitizeCode(raw).trim()
+  if (!s) return null
 
-  const fileInputRef = useRef(null);
-  const saveTimer = useRef(null);
-  const undoStack = useRef([]);
-  const [canUndo, setCanUndo] = useState(false);
-
-  // Load persisted data once (stored locally in this browser), migrating any
-  // older single-class save into the new multi-class catalog.
-  useEffect(() => {
-    try {
-      const dark = localStorage.getItem(DARK_KEY) === "1";
-      setDarkMode(dark);
-      applyTheme(dark ? "dark" : "light");
-
-      const pin = localStorage.getItem(PIN_KEY);
-      setPinSet(!!pin);
-      setLocked(!!pin);
-
-      let list = [];
-      const rawClasses = localStorage.getItem(CLASSES_KEY);
-      if (rawClasses) list = JSON.parse(rawClasses);
-
-      if (list.length === 0) {
-        const legacyRaw = localStorage.getItem(LEGACY_KEY);
-        if (legacyRaw) {
-          const legacy = JSON.parse(legacyRaw);
-          if (legacy.roster && legacy.roster.length > 0) {
-            list = [
-              {
-                id: "legacy",
-                className: legacy.className || "",
-                roster: legacy.roster || [],
-                subjects: legacy.subjects || [],
-                grades: legacy.grades || {},
-                attendance: {},
-                evaluationType: legacy.evaluationType || EVALUATION_TYPES[0],
-                entryModeChosen: true,
-                updatedAt: Date.now(),
-              },
-            ];
-          }
-        }
-      }
-
-      setClassesList(list);
-      const savedActiveId = localStorage.getItem(ACTIVE_KEY);
-      const active = list.find((c) => c.id === savedActiveId) || list[0];
-      if (active) {
-        setActiveId(active.id);
-        setRoster(active.roster || []);
-        setSubjects(active.subjects || []);
-        setGrades(active.grades || {});
-        setAttendance(active.attendance || {});
-        setClassName(active.className || "");
-        setEvaluationType(active.evaluationType || "");
-        setEntryModeChosen(active.entryModeChosen === undefined ? true : active.entryModeChosen);
-        setActiveTab("parEleve");
-        setShowWelcome(false);
-      }
-    } catch (e) {
-      // no saved data yet
-    }
-    setLoaded(true);
-  }, []);
-
-  // Autosave (debounced): keeps the active class's data in sync inside the
-  // multi-class catalog stored in localStorage.
-  useEffect(() => {
-    if (!loaded) return;
-    if (roster.length === 0 || !activeId) return;
-    setSaveState("saving");
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      try {
-        setClassesList((prev) => {
-          const others = prev.filter((c) => c.id !== activeId);
-          const updated = [
-            ...others,
-            { id: activeId, className, evaluationType, entryModeChosen, roster, subjects, grades, attendance, updatedAt: Date.now() },
-          ];
-          localStorage.setItem(CLASSES_KEY, JSON.stringify(updated));
-          localStorage.setItem(ACTIVE_KEY, activeId);
-          return updated;
-        });
-        setSaveState("saved");
-      } catch (e) {
-        setSaveState("idle");
-      }
-    }, 700);
-    return () => clearTimeout(saveTimer.current);
-  }, [roster, subjects, grades, attendance, className, evaluationType, entryModeChosen, activeId, loaded]);
-
-  const toggleDarkMode = () => {
-    setDarkMode((prev) => {
-      const next = !prev;
-      applyTheme(next ? "dark" : "light");
-      localStorage.setItem(DARK_KEY, next ? "1" : "0");
-      forceThemeRerender((n) => n + 1);
-      return next;
-    });
-  };
-
-  const startNewClass = () => {
-    const id = `cls_${Date.now()}`;
-    setActiveId(id);
-    setRoster([]);
-    setSubjects([]);
-    setGrades({});
-    setAttendance({});
-    setClassName("");
-    setEvaluationType("");
-    setEntryModeChosen(false);
-    setActiveTab("parEleve");
-    setStudentIndex(0);
-    setShowWelcome(true);
-    setShowClassSwitcher(false);
-    undoStack.current = [];
-    setCanUndo(false);
-  };
-
-  const switchToClass = (id) => {
-    const rec = classesList.find((c) => c.id === id);
-    if (!rec) return;
-    setActiveId(id);
-    setRoster(rec.roster || []);
-    setSubjects(rec.subjects || []);
-    setGrades(rec.grades || {});
-    setAttendance(rec.attendance || {});
-    setClassName(rec.className || "");
-    setEvaluationType(rec.evaluationType || "");
-    setEntryModeChosen(rec.entryModeChosen === undefined ? true : rec.entryModeChosen);
-    setActiveTab("parEleve");
-    setStudentIndex(0);
-    setShowClassSwitcher(false);
-    undoStack.current = [];
-    setCanUndo(false);
-  };
-
-  const deleteClass = (id) => {
-    if (!window.confirm("Supprimer définitivement cette classe et toutes ses notes ?")) return;
-    const remaining = classesList.filter((c) => c.id !== id);
-    localStorage.setItem(CLASSES_KEY, JSON.stringify(remaining));
-    setClassesList(remaining);
-    if (id === activeId) {
-      if (remaining.length > 0) {
-        switchToClass(remaining[0].id);
-      } else {
-        setActiveId(null);
-        setRoster([]);
-        setSubjects([]);
-        setGrades({});
-        setAttendance({});
-        setClassName("");
-        localStorage.removeItem(ACTIVE_KEY);
-      }
-    }
-  };
-
-  const pushUndo = (prevGrades) => {
-    undoStack.current.push(JSON.parse(JSON.stringify(prevGrades)));
-    if (undoStack.current.length > 20) undoStack.current.shift();
-    setCanUndo(true);
-  };
-
-  const handleUndo = () => {
-    const last = undoStack.current.pop();
-    if (last) {
-      setGrades(last);
-      setCanUndo(undoStack.current.length > 0);
-      if (navigator.vibrate) navigator.vibrate(20);
-    }
-  };
-
-  const ranking = useMemo(() => computeRanking(roster, subjects, grades, attendance), [roster, subjects, grades, attendance]);
-  const rankByMatricule = useMemo(() => {
-    const m = {};
-    ranking.forEach((r) => (m[r.matricule] = r));
-    return m;
-  }, [ranking]);
-
-  const filteredRoster = useMemo(() => {
-    if (!search.trim()) return roster;
-    const q = search.toLowerCase();
-    return roster.filter(
-      (s) => s.nom.toLowerCase().includes(q) || s.prenoms.toLowerCase().includes(q) || s.matricule.includes(q)
-    );
-  }, [roster, search]);
-
-  const handleFile = useCallback((file) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target.result);
-        const wb = XLSX.read(data, { type: "array" });
-        const sheetName = wb.SheetNames[0];
-        const ws = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
-
-        const headerRow1 = rows[0] || [];
-        const newSubjects = [];
-        for (let c = 3; c < headerRow1.length; c++) {
-          if (headerRow1[c] && String(headerRow1[c]).trim() !== "") {
-            newSubjects.push({ key: `subj_${c}`, label: String(headerRow1[c]).trim(), col: c });
-            c += 1; // skip the paired "perfectionnement" column
-          }
-        }
-
-        const newRoster = [];
-        const newGrades = {};
-        for (let r = 2; r < rows.length; r++) {
-          const row = rows[r] || [];
-          const rawMat = row[0];
-          if (!rawMat || String(rawMat).trim() === "") continue;
-          const matricule = cleanMatricule(rawMat);
-          const nom = String(row[1] || "").trim();
-          const prenoms = String(row[2] || "").trim();
-          newRoster.push({ matricule, rawMatricule: String(rawMat), nom, prenoms });
-          newGrades[matricule] = {};
-          newSubjects.forEach((s) => {
-            const obtenue = row[s.col] !== undefined ? String(row[s.col]) : "";
-            const perfectionnement = row[s.col + 1] !== undefined ? String(row[s.col + 1]) : "";
-            newGrades[matricule][s.key] = { obtenue, perfectionnement, rawCode: codeFromValues(obtenue, perfectionnement) };
-          });
-        }
-
-        const guessedClassName = sheetName.replace(/^Notes\s*-\s*/i, "").trim();
-        setSubjects(newSubjects);
-        setRoster(newRoster);
-        setGrades(newGrades);
-        setClassName(guessedClassName || "");
-        setActiveTab("parEleve");
-        setActiveId((prev) => prev || `cls_${Date.now()}`);
-      } catch (err) {
-        alert("Impossible de lire ce fichier. Vérifie qu'il s'agit bien d'un export EducMaster (.xlsx).");
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  }, []);
-
-  const updateGradeCode = (matricule, subjectKey, rawCode) => {
-    const { obtenue, perfectionnement } = parseCode(rawCode);
-    if (isCodeComplete(rawCode)) {
-      pushUndo(grades);
-    }
-    setGrades((prev) => ({
-      ...prev,
-      [matricule]: {
-        ...prev[matricule],
-        [subjectKey]: { rawCode, obtenue, perfectionnement },
-      },
-    }));
-  };
-
-  const toggleAttendance = (matricule) => {
-    setAttendance((prev) => ({
-      ...prev,
-      [matricule]: prev[matricule] === false ? true : false,
-    }));
-  };
-
-  const addStudent = () => {
-    if (!newStudent.nom.trim()) return;
-    const matricule = newStudent.matricule.trim() || `TEMP-${Date.now()}`;
-    if (roster.some((s) => s.matricule === matricule)) {
-      alert("Ce matricule existe déjà dans la classe.");
-      return;
-    }
-    setRoster((prev) => [...prev, { matricule, rawMatricule: matricule, nom: newStudent.nom.trim(), prenoms: newStudent.prenoms.trim() }]);
-    setGrades((prev) => ({ ...prev, [matricule]: {} }));
-    setNewStudent({ matricule: "", nom: "", prenoms: "" });
-  };
-
-  const removeStudent = (matricule) => {
-    if (!window.confirm("Retirer cet élève de la classe ?")) return;
-    setRoster((prev) => prev.filter((s) => s.matricule !== matricule));
-    setGrades((prev) => {
-      const next = { ...prev };
-      delete next[matricule];
-      return next;
-    });
-  };
-
-  const resetAll = () => {
-    if (!activeId) return;
-    deleteClass(activeId);
-  };
-
-  const handleSetPin = () => {
-    const pin = window.prompt("Choisis un code à 4 chiffres pour verrouiller l'application :");
-    if (!pin) return;
-    if (!/^\d{4}$/.test(pin)) {
-      alert("Le code doit contenir exactement 4 chiffres.");
-      return;
-    }
-    localStorage.setItem(PIN_KEY, pin);
-    setPinSet(true);
-    alert("Code enregistré. Utilise l'icône de cadenas pour verrouiller l'application.");
-  };
-
-  const handleRemovePin = () => {
-    if (!window.confirm("Supprimer le code PIN ? L'application ne sera plus verrouillable.")) return;
-    localStorage.removeItem(PIN_KEY);
-    setPinSet(false);
-    setLocked(false);
-  };
-
-  const handleLockNow = () => {
-    if (!pinSet) {
-      handleSetPin();
-      return;
-    }
-    setLocked(true);
-  };
-
-  const buildWorkbook = () => {
-    const header1 = ["Matricule", "Nom", "Prénoms"];
-    const header2 = ["", "", ""];
-    subjects.forEach((s) => {
-      header1.push(s.label, "");
-      header2.push("Note obtenue", "Note perfectionnement");
-    });
-    const wsData = [header1, header2];
-    roster.forEach((stu) => {
-      const row = [stu.rawMatricule || stu.matricule, stu.nom, stu.prenoms];
-      subjects.forEach((s) => {
-        const g = grades[stu.matricule]?.[s.key] || {};
-        const obtenueDisplay = g.obtenue !== undefined && g.obtenue !== "" ? String(g.obtenue).replace(".", ",") : "";
-        row.push(obtenueDisplay, g.perfectionnement ?? "");
-      });
-      wsData.push(row);
-    });
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    const merges = subjects.map((s, i) => {
-      const c = 3 + i * 2;
-      return { s: { r: 0, c }, e: { r: 0, c: c + 1 } };
-    });
-    ws["!merges"] = merges;
-    ws["!cols"] = [{ wch: 16 }, { wch: 18 }, { wch: 22 }, ...subjects.flatMap(() => [{ wch: 14 }, { wch: 16 }])];
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, `Notes - ${className || "Classe"}`.slice(0, 31));
-
-    const recapData = [["Nom", "Prénoms", "Matricule", "Moyenne générale", "Rang", "Décision"]];
-    ranking.forEach((r) => {
-      const decision = r.absent ? "Absent(e)" : r.moyenne === null ? "-" : r.moyenne >= PASSING_AVERAGE ? "Admis(e)" : "Non admis(e)";
-      recapData.push([r.nom, r.prenoms, r.matricule, r.moyenne !== null ? Math.round(r.moyenne * 100) / 100 : "-", r.rang ?? "-", decision]);
-    });
-    const ws2 = XLSX.utils.aoa_to_sheet(recapData);
-    ws2["!cols"] = [{ wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 16 }, { wch: 8 }, { wch: 14 }];
-    XLSX.utils.book_append_sheet(wb, ws2, "Récapitulatif");
-
-    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    const evalSlug = evaluationType ? `_${evaluationType.replace(/\s+/g, "_")}` : "";
-    const filename = `Notes_${(className || "Classe").replace(/\s+/g, "_")}${evalSlug}_EducMaster.xlsx`;
-    return { wbout, filename };
-  };
-
-  const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-
-  const handleExport = () => {
-    if (roster.length === 0) return;
-    const { wbout, filename } = buildWorkbook();
-    const blob = new Blob([wbout], { type: XLSX_MIME });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleShare = async () => {
-    if (roster.length === 0) return;
-    try {
-      const { wbout, filename } = buildWorkbook();
-      const blob = new Blob([wbout], { type: XLSX_MIME });
-      const file = new File([blob], filename, { type: XLSX_MIME });
-
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: filename, text: `Notes de la classe ${className || ""}` });
-      } else if (navigator.share) {
-        // Some browsers support sharing text/links but not files.
-        alert(
-          "Ce navigateur ne permet pas de partager directement le fichier Excel. Utilise le bouton \"Exporter\" puis partage le fichier téléchargé depuis tes fichiers (WhatsApp, etc.)."
-        );
-      } else {
-        alert(
-          "Le partage direct n'est pas disponible sur ce navigateur (souvent le cas sur PC). Utilise le bouton \"Exporter\" puis partage le fichier téléchargé depuis tes fichiers."
-        );
-      }
-    } catch (e) {
-      if (e && e.name === "AbortError") return; // person cancelled the share sheet
-      alert("Le partage a échoué : " + (e && e.message ? e.message : "erreur inconnue") + ". Utilise plutôt le bouton \"Exporter\".");
-    }
-  };
-
-  const activeSubject = subjects.find((s) => s.key === activeTab);
-
-  if (locked) {
-    return (
-      <PinLockScreen
-        onUnlock={() => setLocked(false)}
-        onForgot={() => {
-          if (window.confirm("Retirer le code PIN oublié ? Tu pourras en redéfinir un nouveau ensuite.")) {
-            localStorage.removeItem(PIN_KEY);
-            setPinSet(false);
-            setLocked(false);
-          }
-        }}
-      />
-    );
+  // Séparateur explicite entre obtenue et perfectionnement
+  const sep = s.match(/^([0-9]+(?:[.,][0-9]+)?)[\s:;']+([0-9]+(?:[.,][0-9]+)?)$/)
+  if (sep) {
+    const obtenue = toNum(sep[1])
+    const perfectionnement = toNum(sep[2])
+    return { obtenue, perfectionnement, incomplete: false }
   }
 
-  if (showWelcomeOverlay) {
-    return (
-      <div style={{ background: T.paper, minHeight: "100vh", fontFamily: "'IBM Plex Sans', sans-serif" }} className="flex items-center justify-center px-4 py-10">
-        <style>{`@import url('${FONT_LINK}');`}</style>
-        <div className="w-full max-w-lg">
-          <WelcomeScreen onStart={() => setShowWelcomeOverlay(false)} />
-        </div>
-      </div>
-    );
-  }
-
-  if (showModePicker) {
-    return (
-      <div style={{ background: T.paper, minHeight: "100vh", fontFamily: "'IBM Plex Sans', sans-serif" }} className="flex items-center justify-center px-4 py-10">
-        <style>{`@import url('${FONT_LINK}');`}</style>
-        <div className="w-full max-w-lg">
-          <EntryModePicker
-            firstSubjectKey={subjects[0]?.key}
-            onBack={() => setShowModePicker(false)}
-            onSelect={(tab) => {
-              setActiveTab(tab);
-              setShowModePicker(false);
-            }}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ background: T.paper, minHeight: "100vh", fontFamily: "'IBM Plex Sans', sans-serif", color: T.ink }}>
-      <style>{`@import url('${FONT_LINK}');
-        input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { opacity: 1; }
-        .tab-btn { transition: transform .15s ease, box-shadow .15s ease; }
-        .tab-btn:hover { transform: translateY(-1px); }
-        ::selection { background: ${T.goldSoft}; }
-      `}</style>
-
-      {/* Header / ledger cover */}
-      <div style={{ background: T.ink, borderBottom: `4px solid ${T.gold}` }} className="px-4 pt-6 pb-5 sm:px-8">
-        <div className="max-w-5xl mx-auto flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <button
-              onClick={() => setShowWelcomeOverlay(true)}
-              className="flex items-center gap-1.5 text-xs tracking-widest uppercase mb-1"
-              style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}
-            >
-              <Home size={12} />
-              NoteExpress · Import EducMaster
-            </button>
-            <input
-              value={className}
-              onChange={(e) => setClassName(e.target.value)}
-              placeholder="Nom de la classe (ex : CM2 Ganmi A)"
-              style={{ fontFamily: "'Fraunces', serif", color: "#FFFFFF", borderBottom: `1px solid ${T.inkSoft}` }}
-              className="bg-transparent text-2xl sm:text-3xl font-semibold outline-none w-full max-w-md placeholder-slate-400"
-            />
-            {roster.length > 0 && evaluationType && (
-              <select
-                value={evaluationType}
-                onChange={(e) => setEvaluationType(e.target.value)}
-                className="mt-1.5 text-xs rounded-full px-2.5 py-1 outline-none"
-                style={{ background: T.gold, color: "#fff", border: "none" }}
-              >
-                {EVALUATION_TYPES.map((ev) => (
-                  <option key={ev} value={ev} style={{ color: T.ink }}>
-                    {ev}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              onClick={() => setShowClassSwitcher((v) => !v)}
-              title="Mes classes"
-              className="p-2 rounded-full relative"
-              style={{ color: T.goldSoft }}
-            >
-              <Layers size={19} />
-              {classesList.length > 1 && (
-                <span
-                  className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full text-[10px] flex items-center justify-center font-semibold"
-                  style={{ background: T.gold, color: "#fff" }}
-                >
-                  {classesList.length}
-                </span>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {showClassSwitcher && (
-          <ClassSwitcher
-            classesList={classesList}
-            activeId={activeId}
-            onSwitch={switchToClass}
-            onNew={startNewClass}
-            onDelete={deleteClass}
-            onClose={() => setShowClassSwitcher(false)}
-          />
-        )}
-      </div>
-
-      <div className={`max-w-5xl mx-auto px-4 sm:px-8 py-6 ${roster.length > 0 && evaluationType && entryModeChosen ? "pb-24" : ""}`}>
-        {roster.length === 0 && showWelcome ? (
-          <WelcomeScreen onStart={() => setShowWelcome(false)} />
-        ) : roster.length === 0 ? (
-          <ImportScreen onFile={handleFile} fileInputRef={fileInputRef} onBack={() => setShowWelcome(true)} />
-        ) : !evaluationType ? (
-          <EvaluationPicker onSelect={setEvaluationType} onBack={() => setShowWelcome(true)} />
-        ) : !entryModeChosen ? (
-          <EntryModePicker
-            firstSubjectKey={subjects[0]?.key}
-            onSelect={(tab) => {
-              setActiveTab(tab);
-              setEntryModeChosen(true);
-            }}
-            onBack={() => setEvaluationType("")}
-          />
-        ) : (
-          <>
-            {/* Contextual sub-navigation */}
-            {activeSubject && (
-              <div className="flex gap-2 overflow-x-auto pb-1 mb-5 -mx-1 px-1">
-                {subjects.map((s) => (
-                  <TabButton key={s.key} active={activeTab === s.key} onClick={() => setActiveTab(s.key)} icon={<PenLine size={15} />}>
-                    {s.label}
-                  </TabButton>
-                ))}
-              </div>
-            )}
-            {(activeTab === "recap" || activeTab === "stats") && (
-              <div className="flex gap-2 mb-5">
-                <TabButton active={activeTab === "recap"} onClick={() => setActiveTab("recap")} icon={<Award size={15} />}>
-                  Classement
-                </TabButton>
-                <TabButton active={activeTab === "stats"} onClick={() => setActiveTab("stats")} icon={<BarChart3 size={15} />}>
-                  Statistiques
-                </TabButton>
-              </div>
-            )}
-
-            {/* Search + export row */}
-            <div className="flex flex-col sm:flex-row gap-3 mb-4">
-              <div
-                className="flex items-center gap-2 flex-1 rounded-lg px-3 py-2"
-                style={{ background: T.card, border: `1px solid ${T.line}` }}
-              >
-                <Search size={16} style={{ color: T.inkSoft }} />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Rechercher un élève…"
-                  className="bg-transparent outline-none w-full text-sm"
-                />
-              </div>
-              <button
-                onClick={handleExport}
-                className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm shrink-0"
-                style={{ background: T.gold, color: "#FFFFFF" }}
-              >
-                <Download size={16} />
-                Exporter pour EducMaster
-              </button>
-            </div>
-
-            {showReorder && (
-              <ReorderPanel subjects={subjects} setSubjects={setSubjects} onClose={() => setShowReorder(false)} />
-            )}
-
-            <p className="text-xs mb-4" style={{ color: T.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
-              {saveState === "saving" ? "Enregistrement…" : saveState === "saved" ? "✓ Enregistré sur cet appareil" : ""}
-              {"  ·  "} {roster.length} élève{roster.length > 1 ? "s" : ""}
-            </p>
-
-            {activeTab === "eleves" && (
-              <ElevesTab
-                roster={filteredRoster}
-                rankByMatricule={rankByMatricule}
-                onRemove={removeStudent}
-                newStudent={newStudent}
-                setNewStudent={setNewStudent}
-                onAdd={addStudent}
-                attendance={attendance}
-                onToggleAttendance={toggleAttendance}
-              />
-            )}
-
-            {activeTab === "parEleve" && (
-              <StudentEntryTab
-                roster={roster}
-                subjects={subjects}
-                grades={grades}
-                onChangeCode={updateGradeCode}
-                currentIndex={studentIndex}
-                setCurrentIndex={setStudentIndex}
-                attendance={attendance}
-                onToggleAttendance={toggleAttendance}
-              />
-            )}
-
-            {activeSubject && (
-              <SubjectTab
-                roster={filteredRoster}
-                subject={activeSubject}
-                grades={grades}
-                onChangeCode={updateGradeCode}
-                attendance={attendance}
-              />
-            )}
-
-            {activeTab === "recap" && <RecapTab ranking={search.trim() ? ranking.filter((r) => filteredRoster.some((f) => f.matricule === r.matricule)) : ranking} />}
-
-            {activeTab === "stats" && <StatsTab roster={roster} subjects={subjects} grades={grades} attendance={attendance} />}
-          </>
-        )}
-      </div>
-
-      {roster.length > 0 && evaluationType && entryModeChosen && (
-        <BottomNav
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          firstSubjectKey={subjects[0]?.key}
-          isSubjectActive={!!activeSubject}
-          onMore={() => setShowMorePanel(true)}
-        />
-      )}
-
-      {showMorePanel && (
-        <MorePanel
-          onClose={() => setShowMorePanel(false)}
-          classesCount={classesList.length}
-          onOpenClasses={() => {
-            setShowMorePanel(false);
-            setShowClassSwitcher(true);
-          }}
-          onReorder={() => {
-            setShowMorePanel(false);
-            setShowReorder(true);
-          }}
-          onChangeMode={() => {
-            setShowMorePanel(false);
-            setShowModePicker(true);
-          }}
-          darkMode={darkMode}
-          onToggleDark={toggleDarkMode}
-          pinSet={pinSet}
-          onLock={() => {
-            setShowMorePanel(false);
-            handleLockNow();
-          }}
-          canUndo={canUndo}
-          onUndo={() => {
-            setShowMorePanel(false);
-            handleUndo();
-          }}
-          onDeleteClass={() => {
-            setShowMorePanel(false);
-            resetAll();
-          }}
-          onGoHome={() => {
-            setShowMorePanel(false);
-            setShowWelcomeOverlay(true);
-          }}
-        />
-      )}
-    </div>
-  );
-
-  function TabButton({ active, onClick, icon, children }) {
-    return (
-      <button
-        onClick={onClick}
-        className="tab-btn flex items-center gap-1.5 whitespace-nowrap px-3.5 py-2 rounded-t-lg text-sm font-medium"
-        style={
-          active
-            ? { background: T.card, color: T.ink, boxShadow: `0 -2px 0 ${T.gold} inset`, border: `1px solid ${T.line}`, borderBottom: `1px solid ${T.card}` }
-            : { background: T.goldSoft, color: T.inkSoft, border: `1px solid ${T.goldLine}` }
-        }
-      >
-        {icon}
-        {children}
-      </button>
-    );
-  }
-}
-
-function ClassSwitcher({ classesList, activeId, onSwitch, onNew, onDelete, onClose }) {
-  return (
-    <div className="max-w-5xl mx-auto mt-3">
-      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.goldLine}` }}>
-        <div className="flex items-center justify-between px-4 py-2.5" style={{ background: T.greenSoft }}>
-          <span className="text-sm font-semibold" style={{ color: T.green }}>Mes classes</span>
-          <button onClick={onClose} style={{ color: T.green }}><X size={16} /></button>
-        </div>
-        <div className="max-h-64 overflow-y-auto">
-          {classesList.length === 0 && (
-            <p className="px-4 py-3 text-xs" style={{ color: T.inkSoft }}>Aucune classe enregistrée pour l'instant.</p>
-          )}
-          {classesList.map((c) => (
-            <div
-              key={c.id}
-              className="flex items-center justify-between px-4 py-2.5"
-              style={{ borderTop: `1px solid ${T.line}`, background: c.id === activeId ? T.goldSoft : "transparent" }}
-            >
-              <button onClick={() => onSwitch(c.id)} className="text-left flex-1 min-w-0">
-                <div className="text-sm font-medium truncate">{c.className || "Classe sans nom"}</div>
-                <div className="text-xs" style={{ color: T.inkSoft }}>{(c.roster || []).length} élève(s)</div>
-              </button>
-              <button onClick={() => onDelete(c.id)} className="p-1.5 ml-2" style={{ color: T.red }}>
-                <Trash2 size={15} />
-              </button>
-            </div>
-          ))}
-        </div>
-        <button
-          onClick={onNew}
-          className="w-full flex items-center justify-center gap-1.5 px-4 py-3 text-sm font-medium"
-          style={{ borderTop: `1px solid ${T.line}`, color: T.green }}
-        >
-          <Plus size={16} /> Nouvelle classe
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function PinLockScreen({ onUnlock, onForgot }) {
-  const [pin, setPin] = useState("");
-  const [error, setError] = useState(false);
-
-  const handleDigit = (d) => {
-    const next = (pin + d).slice(0, 4);
-    setPin(next);
-    setError(false);
-    if (next.length === 4) {
-      const saved = localStorage.getItem(PIN_KEY);
-      setTimeout(() => {
-        if (next === saved) {
-          onUnlock();
-        } else {
-          setError(true);
-          setPin("");
-          if (navigator.vibrate) navigator.vibrate([30, 40, 30]);
-        }
-      }, 120);
+  // Décimal sans séparateur : "12,52" -> obtenue "12,5" + perfectionnement "2"
+  if (/[.,]/.test(s)) {
+    const m = s.match(/^([0-9]+)[.,]([0-9]*)$/)
+    if (!m) return null
+    const intPart = m[1]
+    const decPart = m[2]
+    if (decPart.length >= 2) {
+      const obtenueDec = decPart.slice(0, -1)
+      const perf = decPart.slice(-1)
+      return { obtenue: toNum(`${intPart}.${obtenueDec}`), perfectionnement: toNum(perf), incomplete: false }
     }
-  };
+    return { obtenue: toNum(`${intPart}.${decPart || '0'}`), perfectionnement: null, incomplete: true }
+  }
 
-  return (
-    <div style={{ background: T.ink, minHeight: "100vh" }} className="flex items-center justify-center px-6">
-      <style>{`@import url('${FONT_LINK}');`}</style>
-      <div className="w-full max-w-xs text-center">
-        <div
-          className="mx-auto mb-6 w-14 h-14 rounded-2xl flex items-center justify-center"
-          style={{ background: T.gold }}
-        >
-          <Lock size={22} color="#fff" />
-        </div>
-        <p style={{ color: "#FFFFFF", fontFamily: "'Fraunces', serif" }} className="text-lg font-semibold mb-1">
-          Application verrouillée
-        </p>
-        <p className="text-xs mb-6" style={{ color: T.goldSoft }}>
-          {error ? "Code incorrect, réessaie." : "Saisis ton code à 4 chiffres"}
-        </p>
-        <div className="flex items-center justify-center gap-3 mb-8">
-          {[0, 1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="w-3.5 h-3.5 rounded-full"
-              style={{ background: i < pin.length ? T.gold : "rgba(255,255,255,0.15)" }}
-            />
-          ))}
-        </div>
-        <div className="grid grid-cols-3 gap-3 mb-6">
-          {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
-            <button
-              key={d}
-              onClick={() => handleDigit(d)}
-              className="py-3.5 rounded-xl text-lg font-semibold"
-              style={{ background: "rgba(255,255,255,0.08)", color: "#FFFFFF" }}
-            >
-              {d}
-            </button>
-          ))}
-          <div />
-          <button
-            onClick={() => handleDigit("0")}
-            className="py-3.5 rounded-xl text-lg font-semibold"
-            style={{ background: "rgba(255,255,255,0.08)", color: "#FFFFFF" }}
-          >
-            0
-          </button>
-          <button
-            onClick={() => setPin((p) => p.slice(0, -1))}
-            className="py-3.5 rounded-xl text-sm font-semibold"
-            style={{ background: "rgba(255,255,255,0.08)", color: "#FFFFFF" }}
-          >
-            ⌫
-          </button>
-        </div>
-        <button onClick={onForgot} className="text-xs underline" style={{ color: T.goldSoft }}>
-          Code oublié ?
-        </button>
-      </div>
-    </div>
-  );
+  // Entier sans séparateur
+  if (/^[0-9]+$/.test(s)) {
+    if (s.length <= 2) {
+      return { obtenue: parseInt(s, 10), perfectionnement: null, incomplete: true }
+    }
+    if (s.length === 3) {
+      return { obtenue: parseInt(s.slice(0, 2), 10), perfectionnement: parseInt(s.slice(2), 10), incomplete: false }
+    }
+    // 4 chiffres et plus : les 2 derniers sont le perfectionnement
+    return {
+      obtenue: parseInt(s.slice(0, s.length - 2), 10),
+      perfectionnement: parseInt(s.slice(-2), 10),
+      incomplete: false,
+    }
+  }
+
+  return null
 }
 
-function ReorderPanel({ subjects, setSubjects, onClose }) {
-  const move = (index, dir) => {
-    const target = index + dir;
-    if (target < 0 || target >= subjects.length) return;
-    const next = [...subjects];
-    [next[index], next[target]] = [next[target], next[index]];
-    setSubjects(next);
-  };
-
-  return (
-    <div className="rounded-xl overflow-hidden mb-4" style={{ background: T.card, border: `1px solid ${T.goldLine}` }}>
-      <div className="flex items-center justify-between px-4 py-2.5" style={{ background: T.greenSoft }}>
-        <span className="text-sm font-semibold" style={{ color: T.green }}>Ordre des matières pour la saisie</span>
-        <button onClick={onClose} style={{ color: T.green }}><X size={16} /></button>
-      </div>
-      <div>
-        {subjects.map((s, i) => (
-          <div
-            key={s.key}
-            className="flex items-center justify-between px-4 py-2.5"
-            style={{ borderTop: i > 0 ? `1px solid ${T.line}` : "none" }}
-          >
-            <span className="text-sm">
-              <span style={{ color: T.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }} className="mr-2">{i + 1}.</span>
-              {s.label}
-            </span>
-            <div className="flex gap-1">
-              <button
-                onClick={() => move(i, -1)}
-                disabled={i === 0}
-                className="p-1.5 rounded disabled:opacity-25"
-                style={{ color: T.green }}
-              >
-                <ChevronLeft size={16} style={{ transform: "rotate(90deg)" }} />
-              </button>
-              <button
-                onClick={() => move(i, 1)}
-                disabled={i === subjects.length - 1}
-                className="p-1.5 rounded disabled:opacity-25"
-                style={{ color: T.green }}
-              >
-                <ChevronRight size={16} style={{ transform: "rotate(90deg)" }} />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+function isCodeComplete(raw) {
+  const p = parseCode(raw)
+  if (!p) return false
+  return !p.incomplete && p.perfectionnement !== null && !Number.isNaN(p.obtenue) && !Number.isNaN(p.perfectionnement)
 }
 
-function BottomNav({ activeTab, setActiveTab, firstSubjectKey, isSubjectActive, onMore }) {
-  const items = [
-    { key: "eleves", label: "Élèves", icon: Users },
-    { key: "parEleve", label: "Saisie", icon: ClipboardList },
-    { key: "matieres", label: "Matières", icon: PenLine },
-    { key: "recap", label: "Classement", icon: Award },
-  ];
+function codeFromValues(obtenue, perfectionnement) {
+  if (obtenue === null || obtenue === undefined || obtenue === '') return ''
+  if (perfectionnement === null || perfectionnement === undefined || perfectionnement === '') {
+    return formatNum(obtenue)
+  }
+  return `${formatNum(obtenue)} ${formatNum(perfectionnement)}`
+}
 
-  const isActive = (key) => {
-    if (key === "matieres") return isSubjectActive;
-    if (key === "recap") return activeTab === "recap" || activeTab === "stats";
-    return activeTab === key;
-  };
+/* ============================================================================
+   CLASSEMENT / MOYENNES
+   ========================================================================== */
 
-  const handleClick = (key) => {
-    if (key === "matieres") {
-      setActiveTab(firstSubjectKey || "eleves");
+function computeRanking(roster, subjects, grades, attendance) {
+  const rows = roster.map((student) => {
+    const isAbsent = attendance?.[student.matricule] === false
+    const studentGrades = grades?.[student.matricule] || {}
+    let sum = 0
+    let count = 0
+    subjects.forEach((subj) => {
+      const g = studentGrades[subj.key]
+      if (g && (g.obtenue !== null && g.obtenue !== undefined)) {
+        sum += toNum(g.obtenue) + toNum(g.perfectionnement)
+        count += 1
+      }
+    })
+    const average = !isAbsent && count > 0 ? sum / count : null
+    return { ...student, average, isAbsent, gradedCount: count }
+  })
+
+  const ranked = [...rows].sort((a, b) => {
+    if (a.average === null && b.average === null) return 0
+    if (a.average === null) return 1
+    if (b.average === null) return -1
+    return b.average - a.average
+  })
+
+  let lastAvg = null
+  let lastRank = 0
+  ranked.forEach((row, idx) => {
+    if (row.average === null) {
+      row.rank = null
+      return
+    }
+    if (lastAvg !== null && Math.abs(row.average - lastAvg) < 1e-9) {
+      row.rank = lastRank
     } else {
-      setActiveTab(key);
+      row.rank = idx + 1
+      lastRank = row.rank
+      lastAvg = row.average
     }
-  };
+  })
 
-  return (
-    <div
-      className="fixed bottom-0 left-0 right-0 flex items-stretch z-20"
-      style={{ background: T.ink, borderTop: `1px solid rgba(255,255,255,0.08)` }}
-    >
-      {items.map(({ key, label, icon: Icon }) => {
-        const active = isActive(key);
-        return (
-          <button
-            key={key}
-            onClick={() => handleClick(key)}
-            className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5"
-            style={{ color: active ? "#FFFFFF" : T.inkSoft }}
-          >
-            <Icon size={20} strokeWidth={active ? 2.4 : 2} />
-            <span className="text-[11px] font-medium">{label}</span>
-          </button>
-        );
-      })}
-      <button
-        onClick={onMore}
-        className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5"
-        style={{ color: T.inkSoft }}
-      >
-        <MoreHorizontal size={20} />
-        <span className="text-[11px] font-medium">Plus</span>
-      </button>
-    </div>
-  );
+  ranked.forEach((row) => {
+    row.decision = row.average === null ? null : row.average >= PASSING_AVERAGE ? 'Admis' : 'Non admis'
+  })
+
+  return ranked
 }
 
-function MorePanel({
-  onClose,
-  classesCount,
-  onOpenClasses,
-  onReorder,
-  onChangeMode,
-  darkMode,
-  onToggleDark,
-  pinSet,
-  onLock,
-  canUndo,
-  onUndo,
-  onDeleteClass,
-  onGoHome,
-}) {
-  const Row = ({ icon: Icon, label, onClick, danger, disabled }) => (
+function computeSubjectStats(roster, subjects, grades, attendance) {
+  return subjects.map((subj) => {
+    let sum = 0
+    let count = 0
+    let success = 0
+    roster.forEach((student) => {
+      if (attendance?.[student.matricule] === false) return
+      const g = grades?.[student.matricule]?.[subj.key]
+      if (g && g.obtenue !== null && g.obtenue !== undefined) {
+        const total = toNum(g.obtenue) + toNum(g.perfectionnement)
+        sum += total
+        count += 1
+        if (total >= SUBJECT_PASS) success += 1
+      }
+    })
+    return {
+      key: subj.key,
+      label: subj.label,
+      average: count > 0 ? sum / count : null,
+      successRate: count > 0 ? (success / count) * 100 : null,
+      graded: count,
+      total: roster.length,
+    }
+  })
+}
+
+/* ============================================================================
+   SYSTÈME DE LICENCE (sans serveur) — btoa/atob + checksum
+   Le code encode : nom de l'école + date d'expiration.
+   Ce n'est pas un système de sécurité incassable : c'est un verrou "raisonnable"
+   côté client, dans l'esprit décrit pour ce projet (pas de backend).
+   ========================================================================== */
+
+function simpleHash(str) {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 31 + str.charCodeAt(i)) >>> 0
+  }
+  return hash
+}
+
+function toBase64Url(str) {
+  const b64 = btoa(unescape(encodeURIComponent(str)))
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function fromBase64Url(b64url) {
+  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4)
+  return decodeURIComponent(escape(atob(padded)))
+}
+
+function generateLicenseCode({ school, days }) {
+  const expiresAt = Date.now() + days * 24 * 60 * 60 * 1000
+  const payload = JSON.stringify({ s: school.trim(), e: expiresAt, v: 1 })
+  const b64url = toBase64Url(payload)
+  const checksum = (simpleHash(b64url + LICENSE_SALT) % 46656).toString(36).toUpperCase().padStart(3, '0')
+  const raw = b64url + checksum
+  const blocks = raw.match(/.{1,5}/g) || [raw]
+  return `NX-${blocks.join('-')}`
+}
+
+function verifyLicenseCode(code) {
+  try {
+    const raw = String(code ?? '').trim().replace(/^NX-/i, '').replace(/[\s-]/g, '')
+    if (raw.length < 8) return { valid: false, reason: 'format' }
+    const checksum = raw.slice(-3)
+    const b64url = raw.slice(0, -3)
+    const expected = (simpleHash(b64url + LICENSE_SALT) % 46656).toString(36).toUpperCase().padStart(3, '0')
+    if (checksum.toUpperCase() !== expected) return { valid: false, reason: 'invalid' }
+    const json = fromBase64Url(b64url)
+    const payload = JSON.parse(json)
+    if (!payload.s || !payload.e) return { valid: false, reason: 'format' }
+    if (Date.now() > payload.e) return { valid: false, reason: 'expired', school: payload.s, expiresAt: payload.e }
+    return { valid: true, school: payload.s, expiresAt: payload.e, code }
+  } catch (e) {
+    return { valid: false, reason: 'format' }
+  }
+}
+
+function loadStoredLicense() {
+  try {
+    const raw = localStorage.getItem(LS_LICENSE)
+    if (!raw) return null
+    const { code } = JSON.parse(raw)
+    const result = verifyLicenseCode(code)
+    return result.valid ? result : { ...result, code }
+  } catch {
+    return null
+  }
+}
+
+function saveLicense(code) {
+  localStorage.setItem(LS_LICENSE, JSON.stringify({ code }))
+}
+
+/* ============================================================================
+   PERSISTANCE DES CLASSES
+   ========================================================================== */
+
+function loadClasses() {
+  try {
+    const raw = localStorage.getItem(LS_CLASSES)
+    if (raw) return JSON.parse(raw)
+  } catch {}
+  // Migration depuis l'ancien format mono-classe
+  try {
+    const legacy = localStorage.getItem(LS_LEGACY)
+    if (legacy) {
+      const old = JSON.parse(legacy)
+      const migrated = { ...old, id: old.id || uid('cls') }
+      return [migrated]
+    }
+  } catch {}
+  return []
+}
+
+function saveClasses(classes) {
+  localStorage.setItem(LS_CLASSES, JSON.stringify(classes))
+}
+
+/* ============================================================================
+   IMPORT EXCEL EDUCMASTER
+   Hypothèse de structure : ligne 0 = en-têtes de matière (label répété / fusionné
+   visuellement), ligne 1 = sous-en-têtes (Matricule, Nom, Prénoms, puis paires
+   "Note obtenue" / "Note perfectionnement"), lignes suivantes = données élèves.
+   ========================================================================== */
+
+function slugify(s) {
+  return normalizeLabel(s).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'matiere'
+}
+
+function parseEducMasterWorkbook(arrayBuffer) {
+  const wb = XLSX.read(arrayBuffer, { type: 'array' })
+  const ws = wb.Sheets[wb.SheetNames[0]]
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true })
+  if (!rows.length) throw new Error('Fichier vide')
+
+  const headerRow0 = rows[0] || []
+  const headerRow1 = rows[1] || []
+
+  // Repère les 3 colonnes fixes par leur libellé (insensible à la casse/accents).
+  // Certains exports mettent ces libellés sur la 1re ligne (fusionnée verticalement
+  // avec la 2e), d'autres sur la 2e : on scanne les deux.
+  let matCol = -1, nomCol = -1, prenomCol = -1
+  ;[headerRow0, headerRow1].forEach((headerRow) => {
+    headerRow.forEach((cell, c) => {
+      const label = normalizeLabel(cell)
+      if (matCol === -1 && label.includes('matricule')) matCol = c
+      else if (nomCol === -1 && label.includes('nom') && !label.includes('prenom')) nomCol = c
+      else if (prenomCol === -1 && label.includes('prenom')) prenomCol = c
+    })
+  })
+  if (matCol === -1) matCol = 0
+  if (nomCol === -1) nomCol = 1
+  if (prenomCol === -1) prenomCol = 2
+
+  const firstSubjectCol = Math.max(matCol, nomCol, prenomCol) + 1
+
+  // Propage les libellés de matière fusionnés (cellule vide = même matière que la précédente)
+  const subjectLabelByCol = {}
+  let lastLabel = ''
+  for (let c = firstSubjectCol; c < headerRow0.length; c++) {
+    const raw = String(headerRow0[c] ?? '').trim()
+    if (raw) lastLabel = raw
+    subjectLabelByCol[c] = lastLabel
+  }
+
+  // Regroupe les colonnes deux par deux (obtenue / perfectionnement) par matière
+  const subjects = []
+  let c = firstSubjectCol
+  let subjIndex = 0
+  while (c < headerRow0.length) {
+    const label = subjectLabelByCol[c]
+    if (!label) { c += 1; continue }
+    // cherche la fin de la plage de cette matière (colonnes consécutives avec le même libellé)
+    let end = c
+    while (end + 1 < headerRow0.length && subjectLabelByCol[end + 1] === label) end += 1
+    const key = `${slugify(label)}_${subjIndex}`
+    subjects.push({ key, label, col: c })
+    subjIndex += 1
+    c = end + 1
+  }
+
+  const roster = []
+  for (let r = 2; r < rows.length; r++) {
+    const row = rows[r]
+    if (!row) continue
+    const rawMat = row[matCol]
+    if (rawMat === undefined || rawMat === null || String(rawMat).trim() === '') continue
+    roster.push({
+      matricule: cleanMatricule(rawMat),
+      rawMatricule: rawMat,
+      nom: String(row[nomCol] ?? '').trim(),
+      prenoms: String(row[prenomCol] ?? '').trim(),
+    })
+  }
+
+  if (!roster.length) throw new Error("Aucun élève détecté dans le fichier.")
+  if (!subjects.length) throw new Error('Aucune matière détectée dans le fichier.')
+
+  return { roster, subjects }
+}
+
+function buildExportWorkbook(klass) {
+  const { roster, subjects, grades, attendance, className } = klass
+  const headerRow0 = ['', '', '']
+  const headerRow1 = ['Matricule', 'Nom', 'Prénoms']
+  subjects.forEach((s) => {
+    headerRow0.push(s.label, '')
+    headerRow1.push('Note obtenue', 'Note perfectionnement')
+  })
+
+  const dataRows = roster.map((student) => {
+    const row = [student.rawMatricule ?? student.matricule, student.nom, student.prenoms]
+    subjects.forEach((s) => {
+      const g = grades?.[student.matricule]?.[s.key]
+      row.push(g?.obtenue ?? '', g?.perfectionnement ?? '')
+    })
+    return row
+  })
+
+  const sheetData = [headerRow0, headerRow1, ...dataRows]
+  const ws = XLSX.utils.aoa_to_sheet(sheetData)
+
+  const merges = []
+  subjects.forEach((s, i) => {
+    const col = 3 + i * 2
+    merges.push({ s: { r: 0, c: col }, e: { r: 0, c: col + 1 } })
+  })
+  ws['!merges'] = merges
+  ws['!cols'] = headerRow1.map(() => ({ wch: 14 }))
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Notes')
+
+  const ranking = computeRanking(roster, subjects, grades, attendance)
+  const recapData = [
+    ['Rang', 'Matricule', 'Nom', 'Prénoms', 'Moyenne / 20', 'Décision'],
+    ...ranking.map((r) => [
+      r.isAbsent ? 'ABS' : r.rank ?? '',
+      r.rawMatricule ?? r.matricule,
+      r.nom,
+      r.prenoms,
+      r.isAbsent ? 'Absent' : r.average !== null ? formatNum(r.average) : '',
+      r.isAbsent ? '' : r.decision ?? '',
+    ]),
+  ]
+  const wsRecap = XLSX.utils.aoa_to_sheet(recapData)
+  wsRecap['!cols'] = [{ wch: 8 }, { wch: 12 }, { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 14 }]
+  XLSX.utils.book_append_sheet(wb, wsRecap, 'Récapitulatif')
+
+  const fileName = `${(className || 'Classe').replace(/[^a-z0-9]+/gi, '_')}_NoteExpress.xlsx`
+  XLSX.writeFile(wb, fileName)
+}
+
+/* ============================================================================
+   PETITS COMPOSANTS D'INTERFACE PARTAGÉS
+   ========================================================================== */
+
+function Screen({ children, className = '' }) {
+  return (
+    <div className={`min-h-screen bg-[#F6F4EF] dark:bg-[#0B1729] text-[#14213D] dark:text-[#EDE6D6] transition-colors ${className}`}>
+      {children}
+    </div>
+  )
+}
+
+function TopBar({ title, subtitle, onBack, right }) {
+  return (
+    <div className="sticky top-0 z-20 bg-[#14213D] dark:bg-[#0B1729] text-[#F6F4EF] px-4 pt-[calc(env(safe-area-inset-top)+0.9rem)] pb-3 flex items-center gap-3 border-b border-[#C9A227]/30 shadow-sm">
+      {onBack && (
+        <button onClick={onBack} className="p-1.5 -ml-1.5 rounded-lg active:bg-white/10">
+          <ChevronLeft size={22} />
+        </button>
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="font-semibold text-[1.05rem] truncate">{title}</div>
+        {subtitle && <div className="text-xs text-[#C9A227] truncate">{subtitle}</div>}
+      </div>
+      {right}
+    </div>
+  )
+}
+
+function PrimaryButton({ children, onClick, disabled, className = '', type = 'button' }) {
+  return (
     <button
+      type={type}
       onClick={onClick}
       disabled={disabled}
-      className="w-full flex items-center gap-3 px-5 py-3.5 text-left disabled:opacity-30"
-      style={{ borderTop: `1px solid ${T.line}` }}
+      className={`w-full py-3.5 rounded-2xl bg-[#14213D] dark:bg-[#C9A227] text-white dark:text-[#0B1729] font-semibold text-[0.98rem] active:scale-[0.98] transition disabled:opacity-40 disabled:active:scale-100 shadow-sm ${className}`}
     >
-      <Icon size={18} style={{ color: danger ? T.red : T.green }} />
-      <span className="text-sm font-medium" style={{ color: danger ? T.red : T.ink }}>{label}</span>
+      {children}
     </button>
-  );
-
-  return (
-    <div className="fixed inset-0 z-30 flex items-end" style={{ background: "rgba(11,74,58,0.4)" }} onClick={onClose}>
-      <div
-        className="w-full rounded-t-2xl overflow-hidden max-w-5xl mx-auto"
-        style={{ background: T.card }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-5 py-3.5" style={{ background: T.greenSoft }}>
-          <span className="text-sm font-semibold" style={{ color: T.green }}>Plus d'options</span>
-          <button onClick={onClose} style={{ color: T.green }}><X size={18} /></button>
-        </div>
-        <Row icon={Home} label="Retour à l'accueil" onClick={onGoHome} />
-        <Row icon={Layers} label={`Mes classes${classesCount > 1 ? ` (${classesCount})` : ""}`} onClick={onOpenClasses} />
-        <Row icon={ArrowUpDown} label="Réorganiser les matières" onClick={onReorder} />
-        <Row icon={ClipboardList} label="Changer le mode de saisie par défaut" onClick={onChangeMode} />
-        <Row icon={darkMode ? Sun : Moon} label={darkMode ? "Mode clair" : "Mode sombre"} onClick={onToggleDark} />
-        <Row icon={pinSet ? Lock : Unlock} label={pinSet ? "Verrouiller maintenant" : "Définir un code PIN"} onClick={onLock} />
-        <Row icon={Undo2} label="Annuler la dernière saisie" onClick={onUndo} disabled={!canUndo} />
-        <Row icon={Trash2} label="Supprimer cette classe" onClick={onDeleteClass} danger />
-        <div style={{ height: "env(safe-area-inset-bottom, 8px)" }} />
-      </div>
-    </div>
-  );
+  )
 }
 
-function EntryModePicker({ onSelect, firstSubjectKey, onBack }) {
+function GhostButton({ children, onClick, className = '' }) {
   return (
-    <div className="rounded-2xl p-8 text-center" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-      <button onClick={onBack} className="flex items-center gap-1 text-sm font-medium mb-4" style={{ color: T.inkSoft }}>
-        <ChevronLeft size={16} /> Retour
-      </button>
-      <div
-        className="mx-auto mb-5 w-14 h-14 rounded-full flex items-center justify-center"
-        style={{ background: T.goldSoft, color: T.gold }}
-      >
-        <ClipboardList size={24} />
-      </div>
-      <h2 style={{ fontFamily: "'Fraunces', serif", color: T.ink }} className="text-2xl font-bold mb-2">
-        Format de saisie
-      </h2>
-      <p className="text-sm max-w-md mx-auto mb-6" style={{ color: T.inkSoft }}>
-        Comment préfères-tu saisir les notes ? Tu pourras changer d'avis à tout moment depuis les onglets.
-      </p>
-      <div className="max-w-sm mx-auto space-y-3">
-        <button
-          onClick={() => onSelect("parEleve")}
-          className="w-full text-left px-5 py-4 rounded-xl"
-          style={{ border: `2px solid ${T.goldLine}` }}
-        >
-          <div className="font-semibold mb-1" style={{ color: T.ink }}>Par élève</div>
-          <div className="text-sm" style={{ color: T.inkSoft }}>
-            Saisis toutes les matières d'un élève avant de passer au suivant.
-          </div>
-        </button>
-        <button
-          onClick={() => onSelect(firstSubjectKey || "eleves")}
-          className="w-full text-left px-5 py-4 rounded-xl"
-          style={{ border: `2px solid ${T.goldLine}` }}
-        >
-          <div className="font-semibold mb-1" style={{ color: T.ink }}>Par matière</div>
-          <div className="text-sm" style={{ color: T.inkSoft }}>
-            Saisis une matière pour tous les élèves, puis passe à la matière suivante.
-          </div>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function EvaluationPicker({ onSelect, onBack }) {
-  return (
-    <div className="rounded-2xl p-8 text-center" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-      <button onClick={onBack} className="flex items-center gap-1 text-sm font-medium mb-4" style={{ color: T.inkSoft }}>
-        <ChevronLeft size={16} /> Retour
-      </button>
-      <div
-        className="mx-auto mb-5 w-14 h-14 rounded-full flex items-center justify-center"
-        style={{ background: T.goldSoft, color: T.gold }}
-      >
-        <Layers size={24} />
-      </div>
-      <h2 style={{ fontFamily: "'Fraunces', serif", color: T.ink }} className="text-2xl font-bold mb-2">
-        Choix de l'évaluation
-      </h2>
-      <p className="text-sm max-w-md mx-auto mb-6" style={{ color: T.inkSoft }}>
-        Sélectionne l'évaluation active pour insérer tes notes. Tu pourras en changer à tout moment
-        depuis l'en-tête de l'application.
-      </p>
-      <div className="max-w-sm mx-auto space-y-2.5">
-        {EVALUATION_TYPES.map((ev) => (
-          <button
-            key={ev}
-            onClick={() => onSelect(ev)}
-            className="w-full text-left px-4 py-3 rounded-lg text-sm font-medium"
-            style={{ border: `2px solid ${T.goldLine}`, color: T.ink }}
-          >
-            {ev}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function WelcomeScreen({ onStart }) {
-  return (
-    <div
-      className="rounded-2xl overflow-hidden text-center"
-      style={{ background: T.card, border: `1px solid ${T.line}` }}
+    <button
+      onClick={onClick}
+      className={`w-full py-3 rounded-2xl border border-[#14213D]/20 dark:border-[#C9A227]/30 font-medium text-[0.95rem] active:bg-black/5 dark:active:bg-white/5 transition ${className}`}
     >
-      <div className="px-6 pt-10 pb-8" style={{ background: T.ink }}>
-        <div
-          className="mx-auto mb-4 w-16 h-16 rounded-2xl flex items-center justify-center"
-          style={{ background: T.gold, fontFamily: "'Fraunces', serif" }}
-        >
-          <span className="text-2xl font-bold" style={{ color: T.ink }}>NE</span>
-        </div>
-        <p className="text-xs tracking-widest uppercase mb-2" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
-          L'application qui facilite la saisie des notes
-        </p>
-        <h1 style={{ fontFamily: "'Fraunces', serif", color: "#FFFFFF" }} className="text-3xl font-bold">
-          NoteExpress
-        </h1>
-      </div>
-
-      <div className="px-6 py-7">
-        <p className="text-sm mb-6" style={{ color: T.inkSoft }}>
-          Importe la liste EducMaster de ta classe, saisis les notes en quelques secondes par élève,
-          puis exporte un fichier prêt à réimporter — sans jongler avec les cellules Excel.
-        </p>
-
-        <div className="grid grid-cols-3 gap-3 mb-7 text-left">
-          <div className="p-3 rounded-lg" style={{ background: T.greenSoft }}>
-            <div className="text-xs font-semibold mb-1" style={{ color: T.green }}>1. Importer</div>
-            <div className="text-xs" style={{ color: T.inkSoft }}>Ton fichier EducMaster</div>
-          </div>
-          <div className="p-3 rounded-lg" style={{ background: T.goldSoft }}>
-            <div className="text-xs font-semibold mb-1" style={{ color: T.gold }}>2. Saisir</div>
-            <div className="text-xs" style={{ color: T.inkSoft }}>Note + perfectionnement, en un geste</div>
-          </div>
-          <div className="p-3 rounded-lg" style={{ background: T.greenSoft }}>
-            <div className="text-xs font-semibold mb-1" style={{ color: T.green }}>3. Exporter</div>
-            <div className="text-xs" style={{ color: T.inkSoft }}>Prêt pour EducMaster</div>
-          </div>
-        </div>
-
-        <button
-          onClick={onStart}
-          className="w-full px-5 py-3 rounded-lg font-medium text-sm"
-          style={{ background: T.gold, color: "#FFFFFF" }}
-        >
-          Commencer →
-        </button>
-        <p className="text-xs mt-4" style={{ color: T.inkSoft }}>
-          Conçu par S. Prince LOKO
-        </p>
-      </div>
-    </div>
-  );
+      {children}
+    </button>
+  )
 }
 
-function ImportScreen({ onFile, fileInputRef, onBack }) {
-  const [dragOver, setDragOver] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
+function EmptyState({ icon: Icon, title, hint }) {
   return (
-    <div
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragOver(false);
-        const f = e.dataTransfer.files?.[0];
-        if (f) onFile(f);
-      }}
-      className="rounded-2xl p-10 text-center"
-      style={{
-        background: T.card,
-        border: `2px dashed ${dragOver ? T.gold : T.goldLine}`,
-      }}
-    >
-      <button onClick={onBack} className="flex items-center gap-1 text-sm font-medium mb-4" style={{ color: T.inkSoft }}>
-        <ChevronLeft size={16} /> Retour
-      </button>
-      <div
-        className="mx-auto mb-5 w-14 h-14 rounded-full flex items-center justify-center"
-        style={{ background: T.goldSoft, color: T.gold }}
-      >
-        <Upload size={24} />
-      </div>
-      <h2 style={{ fontFamily: "'Fraunces', serif", color: T.ink }} className="text-2xl font-bold mb-2">
-        Importer la liste de la classe
-      </h2>
-      <p className="text-sm max-w-md mx-auto mb-4" style={{ color: T.inkSoft }}>
-        Dépose ici le fichier Excel EducMaster (vide ou déjà rempli) — matricules, noms et prénoms seront
-        récupérés automatiquement, ainsi que la liste des matières.
-      </p>
-
-      <button
-        onClick={() => setShowHelp((v) => !v)}
-        className="text-xs underline mb-6"
-        style={{ color: T.green }}
-      >
-        {showHelp ? "Masquer l'aide" : "Je ne sais pas où trouver ce fichier sur mon téléphone"}
-      </button>
-
-      {showHelp && (
-        <div
-          className="text-left text-xs rounded-lg p-4 mb-6 max-w-md mx-auto"
-          style={{ background: T.greenSoft, color: T.green }}
-        >
-          <ol className="list-decimal ml-4 space-y-1.5">
-            <li>Ouvre l'application <strong>Fichiers</strong> (ou <strong>Mes Fichiers / My Files</strong>) sur ton téléphone.</li>
-            <li>Va dans le dossier <strong>Téléchargements</strong> (Download) — c'est là que les fichiers reçus par WhatsApp, email ou navigateur atterrissent en général.</li>
-            <li>Cherche le fichier envoyé par EducMaster (il se termine par <strong>.xlsx</strong>).</li>
-            <li>Reviens ici et appuie sur le bouton ci-dessous — le sélecteur de fichiers de ton téléphone s'ouvrira au même endroit.</li>
-          </ol>
-        </div>
-      )}
-
-      <button
-        onClick={() => fileInputRef.current?.click()}
-        className="px-5 py-2.5 rounded-lg font-medium text-sm"
-        style={{ background: T.ink, color: "#FFFFFF" }}
-      >
-        Choisir un fichier .xlsx
-      </button>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".xlsx,.xls"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onFile(f);
-        }}
-      />
+    <div className="flex flex-col items-center justify-center text-center py-16 px-8 text-[#14213D]/50 dark:text-[#EDE6D6]/40">
+      {Icon && <Icon size={36} className="mb-3 opacity-60" />}
+      <div className="font-medium">{title}</div>
+      {hint && <div className="text-sm mt-1">{hint}</div>}
     </div>
-  );
+  )
 }
 
-function StudentEntryTab({ roster, subjects, grades, onChangeCode, currentIndex, setCurrentIndex, attendance, onToggleAttendance }) {
-  const safeIndex = Math.min(Math.max(currentIndex, 0), Math.max(roster.length - 1, 0));
-  const student = roster[safeIndex];
-  const inputRefs = useRef([]);
+/* ============================================================================
+   LICENCE — écran de verrouillage + panneau admin de génération de codes
+   ========================================================================== */
 
-  useEffect(() => {
-    if (currentIndex !== safeIndex) setCurrentIndex(safeIndex);
-  }, [safeIndex, currentIndex, setCurrentIndex]);
+function LicenseGate({ onActivated }) {
+  const [code, setCode] = useState('')
+  const [error, setError] = useState('')
+  const [adminOpen, setAdminOpen] = useState(false)
+  const [adminUnlocked, setAdminUnlocked] = useState(false)
+  const [adminPass, setAdminPass] = useState('')
+  const [school, setSchool] = useState('')
+  const [days, setDays] = useState(365)
+  const [generated, setGenerated] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [logoTaps, setLogoTaps] = useState(0)
 
-  useEffect(() => {
-    const t = setTimeout(() => inputRefs.current[0]?.focus(), 30);
-    return () => clearTimeout(t);
-  }, [safeIndex]);
-
-  if (!student) {
-    return (
-      <div className="rounded-xl p-8 text-center text-sm" style={{ background: T.card, border: `1px solid ${T.line}`, color: T.inkSoft }}>
-        Aucun élève à afficher.
-      </div>
-    );
+  function handleActivate() {
+    const result = verifyLicenseCode(code)
+    if (!result.valid) {
+      setError(
+        result.reason === 'expired'
+          ? `Cette licence a expiré. Contactez le fournisseur pour la renouveler.`
+          : 'Code invalide. Vérifiez la saisie (copier-coller conseillé).'
+      )
+      return
+    }
+    saveLicense(code)
+    setError('')
+    onActivated(result)
   }
 
-  const isComplete = (stu) =>
-    attendance[stu.matricule] === false ||
-    subjects.every((s) => {
-      const g = grades[stu.matricule]?.[s.key];
-      return g && g.obtenue !== "" && g.obtenue !== undefined;
-    });
-
-  const goToNextIncomplete = () => {
-    const idx = roster.findIndex((s, i) => i > safeIndex && !isComplete(s));
-    const fallback = roster.findIndex((s) => !isComplete(s));
-    const target = idx !== -1 ? idx : fallback;
-    if (target !== -1) setCurrentIndex(target);
-  };
-
-  const incompleteCount = roster.filter((s) => !isComplete(s)).length;
-  const absent = attendance[student.matricule] === false;
-
-  const handleCodeChange = (subjIdx, subjectKey, digits) => {
-    onChangeCode(student.matricule, subjectKey, digits);
-    if (isCodeComplete(digits)) {
-      if (navigator.vibrate) navigator.vibrate(12);
-      if (subjIdx < subjects.length - 1) {
-        setTimeout(() => inputRefs.current[subjIdx + 1]?.focus(), 10);
-      } else if (safeIndex < roster.length - 1) {
-        setTimeout(() => setCurrentIndex(safeIndex + 1), 250);
-      }
+  function handleLogoTap() {
+    const next = logoTaps + 1
+    setLogoTaps(next)
+    if (next >= 5) {
+      setAdminOpen(true)
+      setLogoTaps(0)
     }
-  };
+  }
 
-  const completedCount = subjects.filter((s) => {
-    const g = grades[student.matricule]?.[s.key];
-    return g && g.obtenue !== "" && g.obtenue !== undefined;
-  }).length;
+  function handleGenerate() {
+    if (!school.trim()) return
+    setGenerated(generateLicenseCode({ school, days }))
+    setCopied(false)
+  }
 
-  return (
-    <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-      <div
-        className="px-4 py-3 flex items-center justify-between gap-2"
-        style={{ background: T.ink, color: "#FFFFFF" }}
-      >
-        <button
-          onClick={() => safeIndex > 0 && setCurrentIndex(safeIndex - 1)}
-          disabled={safeIndex === 0}
-          className="p-1.5 rounded-full disabled:opacity-30"
-          style={{ background: "rgba(255,255,255,0.1)" }}
-        >
-          <ChevronLeft size={18} />
-        </button>
-        <div className="text-center">
-          <div className="text-xs" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
-            Élève {safeIndex + 1} / {roster.length} · {completedCount}/{subjects.length} matières
-          </div>
-          <div style={{ fontFamily: "'Fraunces', serif" }} className="font-semibold">
-            {student.nom} {student.prenoms}
-          </div>
-          <button
-            onClick={() => onToggleAttendance(student.matricule)}
-            className="mt-1 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold"
-            style={{ background: absent ? T.red : T.gold, color: "#fff" }}
-          >
-            {absent ? <UserX size={12} /> : <UserCheck size={12} />}
-            {absent ? "Absent" : "Présent"}
-          </button>
-        </div>
-        <button
-          onClick={() => safeIndex < roster.length - 1 && setCurrentIndex(safeIndex + 1)}
-          disabled={safeIndex === roster.length - 1}
-          className="p-1.5 rounded-full disabled:opacity-30"
-          style={{ background: "rgba(255,255,255,0.1)" }}
-        >
-          <ChevronRight size={18} />
-        </button>
-      </div>
+  function handleCopy() {
+    navigator.clipboard?.writeText(generated).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
 
-      <select
-        value={safeIndex}
-        onChange={(e) => setCurrentIndex(Number(e.target.value))}
-        className="w-full px-4 py-2 text-sm border-b outline-none"
-        style={{ borderColor: T.line, color: T.inkSoft }}
-      >
-        {roster.map((s, i) => (
-          <option key={s.matricule} value={i}>
-            {i + 1}. {s.nom} {s.prenoms}
-          </option>
-        ))}
-      </select>
-
-      <div className="divide-y" style={{ borderColor: T.line, opacity: absent ? 0.5 : 1 }}>
-        {subjects.map((s, idx) => {
-          const g = grades[student.matricule]?.[s.key] || { obtenue: "", perfectionnement: "", rawCode: "" };
-          const displayCode = g.rawCode !== undefined && g.rawCode !== "" ? g.rawCode : codeFromValues(g.obtenue, g.perfectionnement);
-          const hasAny = g.obtenue !== "" && g.obtenue !== undefined;
-          const total = hasAny ? (toNum(g.obtenue) || 0) + (toNum(g.perfectionnement) || 0) : null;
-          const color = total === null ? T.inkSoft : total >= 10 ? T.green : T.red;
-          return (
-            <div key={s.key} className="p-4" style={{ borderColor: T.line }}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium">{s.label}</span>
-                {hasAny && (
-                  <span className="inline-flex items-center gap-1 text-xs font-semibold" style={{ color: T.green }}>
-                    <Check size={14} /> Fait
-                  </span>
-                )}
-              </div>
+  if (adminOpen) {
+    return (
+      <Screen>
+        <TopBar title="Espace administrateur" subtitle="Génération de licences" onBack={() => { setAdminOpen(false); setAdminUnlocked(false) }} />
+        <div className="p-5 max-w-md mx-auto space-y-5">
+          {!adminUnlocked ? (
+            <>
+              <p className="text-sm opacity-70">Réservé au responsable de {APP_NAME}. Saisissez le code d'accès administrateur.</p>
               <input
-                ref={(el) => (inputRefs.current[idx] = el)}
-                type="text"
+                type="password"
                 inputMode="numeric"
-                pattern="[0-9]*"
-                maxLength={7}
-                disabled={absent}
-                placeholder={absent ? "Élève absent" : "Ex: 1202 ou 12,52"}
-                value={displayCode}
-                onChange={(e) => handleCodeChange(idx, s.key, sanitizeCode(e.target.value))}
-                className="w-full text-center py-3 rounded-lg text-2xl font-semibold"
-                style={{
-                  border: `2px solid ${hasAny ? T.green : T.goldLine}`,
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  letterSpacing: "0.2em",
-                }}
+                value={adminPass}
+                onChange={(e) => setAdminPass(e.target.value)}
+                placeholder="Code administrateur"
+                className="w-full px-4 py-3 rounded-xl border border-[#14213D]/20 dark:border-[#C9A227]/30 bg-white dark:bg-[#132238] outline-none focus:ring-2 focus:ring-[#C9A227]"
               />
-              {hasAny && (
-                <div className="text-center text-xs mt-1.5" style={{ color, fontFamily: "'IBM Plex Mono', monospace" }}>
-                  Note {formatNum(toNum(g.obtenue))} + Perf. {g.perfectionnement} = <strong>{formatNum(total)}/20</strong>
+              <PrimaryButton onClick={() => adminPass === ADMIN_PASSCODE ? setAdminUnlocked(true) : setError('Code administrateur incorrect')}>
+                Déverrouiller
+              </PrimaryButton>
+              {error && <p className="text-sm text-red-500 flex items-center gap-1.5"><AlertCircle size={15} />{error}</p>}
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 text-[#C9A227] mb-1">
+                <ShieldCheck size={18} />
+                <span className="font-medium text-sm">Générateur de licence</span>
+              </div>
+              <div>
+                <label className="text-sm font-medium block mb-1.5">Nom de l'école</label>
+                <input
+                  value={school}
+                  onChange={(e) => setSchool(e.target.value)}
+                  placeholder="Ex : EPP Ganmi A"
+                  className="w-full px-4 py-3 rounded-xl border border-[#14213D]/20 dark:border-[#C9A227]/30 bg-white dark:bg-[#132238] outline-none focus:ring-2 focus:ring-[#C9A227]"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium block mb-1.5">Durée de la licence</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[30, 90, 180, 365].map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => setDays(d)}
+                      className={`py-2 rounded-xl text-sm font-medium border ${days === d ? 'bg-[#14213D] dark:bg-[#C9A227] text-white dark:text-[#0B1729] border-transparent' : 'border-[#14213D]/20 dark:border-[#C9A227]/30'}`}
+                    >
+                      {d === 365 ? '1 an' : `${d} j`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <PrimaryButton onClick={handleGenerate} disabled={!school.trim()}>Générer le code</PrimaryButton>
+              {generated && (
+                <div className="p-4 rounded-2xl bg-[#14213D]/5 dark:bg-white/5 space-y-2">
+                  <div className="text-xs opacity-60">Code à transmettre à l'école (WhatsApp, SMS...)</div>
+                  <div className="font-mono text-sm break-all">{generated}</div>
+                  <button onClick={handleCopy} className="flex items-center gap-1.5 text-sm text-[#C9A227] font-medium">
+                    <Copy size={15} /> {copied ? 'Copié !' : 'Copier le code'}
+                  </button>
                 </div>
               )}
+            </>
+          )}
+        </div>
+      </Screen>
+    )
+  }
+
+  return (
+    <Screen>
+      <div className="min-h-screen flex flex-col justify-center px-6 py-10 max-w-md mx-auto">
+        <div className="flex flex-col items-center mb-8">
+          <button onClick={handleLogoTap} className="w-16 h-16 rounded-2xl bg-[#14213D] dark:bg-[#C9A227] flex items-center justify-center mb-4 active:scale-95 transition">
+            <span className="text-white dark:text-[#0B1729] font-bold text-xl">NE</span>
+          </button>
+          <h1 className="text-xl font-bold">{APP_NAME}</h1>
+          <p className="text-sm opacity-60 mt-1 text-center">Saisie rapide des notes EducMaster</p>
+        </div>
+
+        <div className="p-5 rounded-2xl bg-white dark:bg-[#132238] shadow-sm space-y-4">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <KeyRound size={16} className="text-[#C9A227]" />
+            Activation requise
+          </div>
+          <p className="text-sm opacity-70">
+            Cette application nécessite un code de licence fourni par votre établissement ou le distributeur de {APP_NAME}.
+          </p>
+          <input
+            value={code}
+            onChange={(e) => { setCode(e.target.value); setError('') }}
+            placeholder="NX-XXXXX-XXXXX-XXXXX"
+            className="w-full px-4 py-3 rounded-xl border border-[#14213D]/20 dark:border-[#C9A227]/30 bg-transparent outline-none focus:ring-2 focus:ring-[#C9A227] font-mono text-sm"
+          />
+          {error && <p className="text-sm text-red-500 flex items-center gap-1.5"><AlertCircle size={15} />{error}</p>}
+          <PrimaryButton onClick={handleActivate} disabled={!code.trim()}>Activer</PrimaryButton>
+        </div>
+
+        <p className="text-xs opacity-40 text-center mt-6">Pas de code ? Contactez la personne qui vous a fourni {APP_NAME}.</p>
+      </div>
+    </Screen>
+  )
+}
+
+function LicenseExpiryBanner({ license, onDismiss }) {
+  if (!license?.expiresAt) return null
+  const daysLeft = Math.ceil((license.expiresAt - Date.now()) / (24 * 60 * 60 * 1000))
+  if (daysLeft > 7) return null
+  return (
+    <div className="bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-200 text-xs px-4 py-2 flex items-center justify-between gap-2">
+      <span className="flex items-center gap-1.5"><AlertCircle size={14} /> Licence expire dans {Math.max(daysLeft, 0)} jour{daysLeft > 1 ? 's' : ''}.</span>
+      <button onClick={onDismiss}><X size={14} /></button>
+    </div>
+  )
+}
+
+/* ============================================================================
+   ÉCRAN PIN
+   ========================================================================== */
+
+function PinLockScreen({ pin, onUnlock }) {
+  const [entry, setEntry] = useState('')
+  const [error, setError] = useState(false)
+
+  function press(d) {
+    if (entry.length >= 4) return
+    const next = entry + d
+    setEntry(next)
+    setError(false)
+    if (next.length === 4) {
+      if (next === pin) {
+        setTimeout(() => onUnlock(), 120)
+      } else {
+        setError(true)
+        setTimeout(() => setEntry(''), 400)
+      }
+    }
+  }
+
+  return (
+    <Screen>
+      <div className="min-h-screen flex flex-col items-center justify-center px-6">
+        <Lock size={28} className="mb-4 text-[#C9A227]" />
+        <p className="text-sm opacity-60 mb-6">Entrez le code PIN</p>
+        <div className={`flex gap-3 mb-8 ${error ? 'animate-pulse' : ''}`}>
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className={`w-3.5 h-3.5 rounded-full ${i < entry.length ? (error ? 'bg-red-500' : 'bg-[#14213D] dark:bg-[#C9A227]') : 'bg-[#14213D]/15 dark:bg-white/15'}`} />
+          ))}
+        </div>
+        <div className="grid grid-cols-3 gap-4 max-w-[280px]">
+          {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((d, i) =>
+            d === '' ? <div key={i} /> : (
+              <button
+                key={i}
+                onClick={() => (d === '⌫' ? setEntry(entry.slice(0, -1)) : press(d))}
+                className="w-16 h-16 rounded-full flex items-center justify-center text-lg font-medium bg-white dark:bg-[#132238] active:bg-[#14213D]/10 dark:active:bg-white/10 shadow-sm"
+              >
+                {d}
+              </button>
+            )
+          )}
+        </div>
+      </div>
+    </Screen>
+  )
+}
+
+/* ============================================================================
+   SÉLECTEUR / GESTIONNAIRE DE CLASSES
+   ========================================================================== */
+
+function ClassSwitcher({ classes, activeId, onSelect, onCreate, onDelete, onClose }) {
+  const [creating, setCreating] = useState(false)
+  const [name, setName] = useState('')
+
+  return (
+    <div className="fixed inset-0 z-30 bg-black/40 flex items-end" onClick={onClose}>
+      <div className="w-full bg-[#F6F4EF] dark:bg-[#0B1729] rounded-t-3xl max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 flex items-center justify-between border-b border-[#14213D]/10 dark:border-white/10">
+          <h2 className="font-semibold">Mes classes</h2>
+          <button onClick={onClose}><X size={20} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          {classes.map((c) => (
+            <div
+              key={c.id}
+              onClick={() => onSelect(c.id)}
+              className={`p-4 rounded-2xl flex items-center justify-between cursor-pointer ${c.id === activeId ? 'bg-[#14213D] text-white dark:bg-[#C9A227] dark:text-[#0B1729]' : 'bg-white dark:bg-[#132238]'}`}
+            >
+              <div className="min-w-0">
+                <div className="font-medium truncate">{c.className}</div>
+                <div className="text-xs opacity-70">{c.roster?.length ?? 0} élèves · {c.evaluationType}</div>
+              </div>
+              {classes.length > 1 && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDelete(c.id) }}
+                  className="p-2 opacity-60 active:opacity-100"
+                >
+                  <Trash2 size={17} />
+                </button>
+              )}
             </div>
-          );
+          ))}
+          {classes.length === 0 && <EmptyState icon={Layers} title="Aucune classe" hint="Créez votre première classe" />}
+        </div>
+        <div className="p-4 border-t border-[#14213D]/10 dark:border-white/10">
+          {creating ? (
+            <div className="space-y-2">
+              <input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Nom de la classe (ex : CM2 Ganmi A)"
+                className="w-full px-4 py-3 rounded-xl border border-[#14213D]/20 dark:border-[#C9A227]/30 bg-white dark:bg-[#132238] outline-none"
+              />
+              <div className="flex gap-2">
+                <GhostButton onClick={() => setCreating(false)}>Annuler</GhostButton>
+                <PrimaryButton onClick={() => { if (name.trim()) { onCreate(name.trim()); setName(''); setCreating(false) } }}>Créer</PrimaryButton>
+              </div>
+            </div>
+          ) : (
+            <PrimaryButton onClick={() => setCreating(true)}>
+              <span className="flex items-center justify-center gap-2"><Plus size={18} /> Nouvelle classe</span>
+            </PrimaryButton>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ============================================================================
+   RÉORGANISATION DES MATIÈRES
+   ========================================================================== */
+
+function ReorderPanel({ subjects, onReorder, onClose }) {
+  const [list, setList] = useState(subjects)
+
+  function move(idx, dir) {
+    const next = [...list]
+    const target = idx + dir
+    if (target < 0 || target >= next.length) return
+    ;[next[idx], next[target]] = [next[target], next[idx]]
+    setList(next)
+  }
+
+  return (
+    <div className="fixed inset-0 z-30 bg-black/40 flex items-end" onClick={onClose}>
+      <div className="w-full bg-[#F6F4EF] dark:bg-[#0B1729] rounded-t-3xl max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 flex items-center justify-between border-b border-[#14213D]/10 dark:border-white/10">
+          <h2 className="font-semibold">Réorganiser les matières</h2>
+          <button onClick={onClose}><X size={20} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          {list.map((s, idx) => (
+            <div key={s.key} className="p-3.5 rounded-xl bg-white dark:bg-[#132238] flex items-center justify-between">
+              <span className="font-medium text-sm">{s.label}</span>
+              <div className="flex gap-1">
+                <button onClick={() => move(idx, -1)} disabled={idx === 0} className="p-2 disabled:opacity-30"><ArrowUp size={16} /></button>
+                <button onClick={() => move(idx, 1)} disabled={idx === list.length - 1} className="p-2 disabled:opacity-30"><ArrowDown size={16} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="p-4 border-t border-[#14213D]/10 dark:border-white/10">
+          <PrimaryButton onClick={() => { onReorder(list); onClose() }}>Enregistrer l'ordre</PrimaryButton>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ============================================================================
+   NAVIGATION BASSE / PANNEAU "PLUS"
+   ========================================================================== */
+
+const TABS = [
+  { key: 'eleves', label: 'Élèves', icon: Users },
+  { key: 'saisie', label: 'Saisie', icon: Edit3 },
+  { key: 'matieres', label: 'Matières', icon: BookOpen },
+  { key: 'classement', label: 'Classement', icon: Trophy },
+  { key: 'plus', label: 'Plus', icon: MoreHorizontal },
+]
+
+function BottomNav({ active, onChange, onMore }) {
+  return (
+    <div className="fixed bottom-0 left-0 right-0 z-20 bg-white dark:bg-[#132238] border-t border-[#14213D]/10 dark:border-white/10 pb-[env(safe-area-inset-bottom)]">
+      <div className="flex">
+        {TABS.map((t) => {
+          const Icon = t.icon
+          const isActive = active === t.key
+          return (
+            <button
+              key={t.key}
+              onClick={() => (t.key === 'plus' ? onMore() : onChange(t.key))}
+              className="flex-1 flex flex-col items-center gap-1 py-2.5"
+            >
+              <Icon size={20} className={isActive ? 'text-[#C9A227]' : 'opacity-50'} />
+              <span className={`text-[0.68rem] ${isActive ? 'text-[#C9A227] font-medium' : 'opacity-50'}`}>{t.label}</span>
+            </button>
+          )
         })}
       </div>
     </div>
-  );
+  )
 }
 
-function ElevesTab({ roster, rankByMatricule, onRemove, newStudent, setNewStudent, onAdd, attendance, onToggleAttendance }) {
-  const absentCount = roster.filter((s) => attendance[s.matricule] === false).length;
-  return (
-    <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-      <div className="px-4 py-2 text-sm flex gap-4" style={{ background: T.greenSoft, color: T.green, fontFamily: "'IBM Plex Mono', monospace" }}>
-        <span>Inscrits : <strong>{roster.length}</strong></span>
-        <span>Présents : <strong>{roster.length - absentCount}</strong></span>
-        <span style={{ color: absentCount > 0 ? T.red : T.green }}>Absents : <strong>{absentCount}</strong></span>
-      </div>
-      <table className="w-full text-base">
-        <thead>
-          <tr style={{ background: T.goldSoft }}>
-            <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Élève</th>
-            <th className="text-right px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Moyenne</th>
-            <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Présence</th>
-            <th className="px-3 py-2"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {roster.map((s, i) => {
-            const r = rankByMatricule[s.matricule];
-            const absent = attendance[s.matricule] === false;
-            return (
-              <tr key={s.matricule} style={{ borderTop: `1px solid ${T.line}`, background: absent ? T.redSoft : i % 2 ? T.paper : T.card }}>
-                <td className="px-3 py-2">
-                  <div className="font-medium">{s.nom} {s.prenoms}</div>
-                  <div className="text-xs" style={{ fontFamily: "'IBM Plex Mono', monospace", color: T.inkSoft }}>{s.matricule}</div>
-                </td>
-                <td className="px-3 py-2 text-right" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                  {absent ? "—" : r?.moyenne !== null && r?.moyenne !== undefined ? r.moyenne.toFixed(2) : "—"}
-                </td>
-                <td className="px-3 py-2 text-center">
-                  <button
-                    onClick={() => onToggleAttendance(s.matricule)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold"
-                    style={{ background: absent ? T.redSoft : T.greenSoft, color: absent ? T.red : T.green }}
-                  >
-                    {absent ? <UserX size={13} /> : <UserCheck size={13} />}
-                    {absent ? "Absent" : "Présent"}
-                  </button>
-                </td>
-                <td className="px-3 py-2 text-right">
-                  <button onClick={() => onRemove(s.matricule)} style={{ color: T.red }}>
-                    <Trash2 size={15} />
-                  </button>
-                </td>
-              </tr>
-            );
-          })}
-          {roster.length === 0 && (
-            <tr>
-              <td colSpan={4} className="px-3 py-6 text-center text-sm" style={{ color: T.inkSoft }}>
-                Aucun élève ne correspond à la recherche.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-      <div className="p-3 flex flex-col sm:flex-row gap-2" style={{ borderTop: `1px solid ${T.line}` }}>
-        <input
-          placeholder="Matricule (optionnel)"
-          value={newStudent.matricule}
-          onChange={(e) => setNewStudent({ ...newStudent, matricule: e.target.value })}
-          className="px-3 py-2 rounded-lg text-sm flex-1"
-          style={{ border: `1px solid ${T.line}` }}
-        />
-        <input
-          placeholder="Nom"
-          value={newStudent.nom}
-          onChange={(e) => setNewStudent({ ...newStudent, nom: e.target.value })}
-          className="px-3 py-2 rounded-lg text-sm flex-1"
-          style={{ border: `1px solid ${T.line}` }}
-        />
-        <input
-          placeholder="Prénoms"
-          value={newStudent.prenoms}
-          onChange={(e) => setNewStudent({ ...newStudent, prenoms: e.target.value })}
-          className="px-3 py-2 rounded-lg text-sm flex-1"
-          style={{ border: `1px solid ${T.line}` }}
-        />
-        <button onClick={onAdd} className="px-4 py-2 rounded-lg text-sm font-medium shrink-0" style={{ background: T.green, color: "#FFFFFF" }}>
-          + Ajouter
-        </button>
-      </div>
-    </div>
-  );
-}
+function MorePanel({
+  onClose, onSwitchClass, onReorder, dark, onToggleDark, pin, onSetPin, onRemovePin,
+  onUndo, canUndo, onDeleteClass, defaultMode, onSetDefaultMode, onGoWelcome, onStats,
+}) {
+  const [pinSetup, setPinSetup] = useState(false)
+  const [newPin, setNewPin] = useState('')
 
-function SubjectTab({ roster, subject, grades, onChangeCode, attendance }) {
-  const inputRefs = useRef([]);
-
-  const handleChange = (i, matricule, digits) => {
-    onChangeCode(matricule, subject.key, digits);
-    if (isCodeComplete(digits)) {
-      if (navigator.vibrate) navigator.vibrate(12);
-      if (i < roster.length - 1) {
-        setTimeout(() => inputRefs.current[i + 1]?.focus(), 10);
-      }
-    }
-  };
-
-  const presentRoster = roster.filter((s) => attendance[s.matricule] !== false);
-  const doneCount = presentRoster.filter((s) => {
-    const g = grades[s.matricule]?.[subject.key];
-    return g && g.obtenue !== "" && g.obtenue !== undefined;
-  }).length;
-  const pct = presentRoster.length > 0 ? Math.round((doneCount / presentRoster.length) * 100) : 0;
-  const missingCount = presentRoster.length - doneCount;
-
-  const goToFirstMissing = () => {
-    const idx = roster.findIndex((s) => {
-      if (attendance[s.matricule] === false) return false;
-      const g = grades[s.matricule]?.[subject.key];
-      return !(g && g.obtenue !== "" && g.obtenue !== undefined);
-    });
-    if (idx !== -1) {
-      inputRefs.current[idx]?.focus();
-      inputRefs.current[idx]?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  };
+  const Row = ({ icon: Icon, label, onClick, danger }) => (
+    <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl bg-white dark:bg-[#132238] ${danger ? 'text-red-500' : ''}`}>
+      <Icon size={18} />
+      <span className="flex-1 text-left text-sm font-medium">{label}</span>
+      <ChevronRight size={16} className="opacity-40" />
+    </button>
+  )
 
   return (
-    <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-      <table className="w-full text-base">
-        <thead>
-          <tr style={{ background: T.goldSoft }}>
-            <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Élève</th>
-            <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Code (OO-P)</th>
-            <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Détail</th>
-            <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {roster.map((s, i) => {
-            const absent = attendance[s.matricule] === false;
-            const g = grades[s.matricule]?.[subject.key] || { obtenue: "", perfectionnement: "", rawCode: "" };
-            const displayCode = g.rawCode !== undefined && g.rawCode !== "" ? g.rawCode : codeFromValues(g.obtenue, g.perfectionnement);
-            const hasAny = g.obtenue !== "" && g.obtenue !== undefined;
-            const total = hasAny ? (toNum(g.obtenue) || 0) + (toNum(g.perfectionnement) || 0) : null;
-            const color = total === null ? T.inkSoft : total >= 10 ? T.green : T.red;
-            return (
-              <tr key={s.matricule} style={{ borderTop: `1px solid ${T.line}`, background: absent ? T.redSoft : i % 2 ? T.paper : T.card, opacity: absent ? 0.6 : 1 }}>
-                <td className="px-3 py-2">
-                  <div className="font-medium">{s.nom}</div>
-                  <div className="text-xs" style={{ color: T.inkSoft }}>{s.prenoms}{absent ? " · Absent" : ""}</div>
-                </td>
-                <td className="px-2 py-2">
-                  <input
-                    ref={(el) => (inputRefs.current[i] = el)}
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    maxLength={7}
-                    disabled={absent}
-                    placeholder="Ex: 1202"
-                    value={displayCode}
-                    onChange={(e) => handleChange(i, s.matricule, sanitizeCode(e.target.value))}
-                    className="w-24 mx-auto block text-center px-2 py-1.5 rounded-md text-base font-semibold"
-                    style={{ border: `1px solid ${T.line}`, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.15em" }}
-                  />
-                </td>
-                <td className="px-2 py-2 text-center text-xs" style={{ color: T.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
-                  {hasAny ? `${g.obtenue} + ${g.perfectionnement}` : "—"}
-                </td>
-                <td className="px-3 py-2 text-center font-semibold" style={{ color, fontFamily: "'IBM Plex Mono', monospace" }}>
-                  {total !== null ? formatNum(total) : "—"}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function RecapTab({ ranking }) {
-  const withMoy = ranking.filter((r) => r.moyenne !== null);
-  const admis = withMoy.filter((r) => r.moyenne >= PASSING_AVERAGE).length;
-  const total = ranking.length;
-
-  return (
-    <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-      <div
-        className="px-4 py-3 flex flex-wrap items-center justify-between gap-2"
-        style={{ background: T.ink, color: "#FFFFFF" }}
-      >
-        <span style={{ fontFamily: "'Fraunces', serif" }} className="font-semibold text-lg">
-          Classement général
-        </span>
-        <span className="text-sm" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
-          {admis} admis sur {total} · seuil de passage : {PASSING_AVERAGE}/20
-        </span>
-      </div>
-      <table className="w-full text-base">
-        <thead>
-          <tr style={{ background: T.goldSoft }}>
-            <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Rang</th>
-            <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Nom</th>
-            <th className="text-left px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Prénoms</th>
-            <th className="text-right px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Moyenne générale</th>
-            <th className="text-center px-3 py-2 font-medium" style={{ color: T.inkSoft }}>Décision</th>
-          </tr>
-        </thead>
-        <tbody>
-          {ranking.map((r, i) => {
-            const isPassing = r.moyenne !== null && r.moyenne >= PASSING_AVERAGE;
-            return (
-              <tr key={r.matricule} style={{ borderTop: `1px solid ${T.line}`, background: i % 2 ? T.paper : T.card }}>
-                <td className="px-3 py-2">
-                  <span
-                    className="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-semibold"
-                    style={{
-                      background: r.rang === 1 ? T.gold : r.rang === 2 || r.rang === 3 ? T.goldSoft : "transparent",
-                      color: r.rang === 1 ? "#fff" : T.ink,
-                      border: r.rang && r.rang > 3 ? `1px solid ${T.line}` : "none",
-                    }}
-                  >
-                    {r.rang ?? "–"}
-                  </span>
-                </td>
-                <td className="px-3 py-2 font-medium">{r.nom}</td>
-                <td className="px-3 py-2">{r.prenoms}</td>
-                <td
-                  className="px-3 py-2 text-right font-semibold"
-                  style={{ fontFamily: "'IBM Plex Mono', monospace", color: r.moyenne === null ? T.inkSoft : isPassing ? T.green : T.red }}
-                >
-                  {r.moyenne !== null ? r.moyenne.toFixed(2) : r.absent ? "Absent(e)" : "En attente"}
-                </td>
-                <td className="px-3 py-2 text-center">
-                  {r.moyenne === null ? (
-                    <span className="text-xs" style={{ color: T.inkSoft }}>{r.absent ? "Absent(e)" : "—"}</span>
-                  ) : (
-                    <span
-                      className="inline-block px-2.5 py-1 rounded-full text-xs font-semibold"
-                      style={{
-                        background: isPassing ? T.greenSoft : T.redSoft,
-                        color: isPassing ? T.green : T.red,
-                      }}
-                    >
-                      {isPassing ? "Admis(e)" : "Non admis(e)"}
-                    </span>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function StatsTab({ roster, subjects, grades, attendance }) {
-  const presentRoster = roster.filter((s) => attendance[s.matricule] !== false);
-
-  const stats = subjects.map((s) => {
-    let sum = 0;
-    let count = 0;
-    let passCount = 0;
-    presentRoster.forEach((stu) => {
-      const g = grades[stu.matricule]?.[s.key];
-      if (g && g.obtenue !== "" && g.obtenue !== undefined) {
-        const total = (toNum(g.obtenue) || 0) + (toNum(g.perfectionnement) || 0);
-        sum += total;
-        count += 1;
-        if (total >= SUBJECT_PASS) passCount += 1;
-      }
-    });
-    const average = count > 0 ? sum / count : null;
-    const passRate = count > 0 ? Math.round((passCount / count) * 100) : null;
-    return { key: s.key, label: s.label, average, passRate, count };
-  });
-
-  const classAverage = (() => {
-    const withAvg = stats.filter((s) => s.average !== null);
-    if (withAvg.length === 0) return null;
-    return withAvg.reduce((acc, s) => acc + s.average, 0) / withAvg.length;
-  })();
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-        <div className="px-4 py-3 flex items-center justify-between" style={{ background: T.ink, color: "#FFFFFF" }}>
-          <span style={{ fontFamily: "'Fraunces', serif" }} className="font-semibold text-lg">Statistiques par matière</span>
-          <span className="text-xs" style={{ color: T.goldSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
-            {presentRoster.length} élève(s) présent(s)
-          </span>
+    <div className="fixed inset-0 z-30 bg-black/40 flex items-end" onClick={onClose}>
+      <div className="w-full bg-[#F6F4EF] dark:bg-[#0B1729] rounded-t-3xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 pb-3 flex items-center justify-between border-b border-[#14213D]/10 dark:border-white/10">
+          <h2 className="font-semibold">Plus</h2>
+          <button onClick={onClose}><X size={20} /></button>
         </div>
-        {classAverage !== null && (
-          <div className="px-4 py-2.5 text-sm" style={{ background: T.greenSoft, color: T.green }}>
-            Moyenne générale de la classe (toutes matières confondues) : <strong>{classAverage.toFixed(2)}/20</strong>
+        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          <Row icon={Layers} label="Changer de classe" onClick={onSwitchClass} />
+          <Row icon={BarChart3} label="Statistiques par matière" onClick={onStats} />
+          <Row icon={ArrowUp} label="Réorganiser les matières" onClick={onReorder} />
+          <Row icon={RotateCcw} label={canUndo ? 'Annuler la dernière saisie' : 'Rien à annuler'} onClick={canUndo ? onUndo : undefined} />
+
+          <button onClick={onToggleDark} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl bg-white dark:bg-[#132238]">
+            {dark ? <Sun size={18} /> : <Moon size={18} />}
+            <span className="flex-1 text-left text-sm font-medium">Mode {dark ? 'clair' : 'sombre'}</span>
+          </button>
+
+          <button onClick={() => onSetDefaultMode(defaultMode === 'eleve' ? 'matiere' : 'eleve')} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl bg-white dark:bg-[#132238]">
+            <ClipboardList size={18} />
+            <span className="flex-1 text-left text-sm font-medium">Mode de saisie par défaut : {defaultMode === 'eleve' ? 'par élève' : 'par matière'}</span>
+          </button>
+
+          {!pinSetup ? (
+            <Row icon={Lock} label={pin ? 'Changer / retirer le PIN' : 'Verrouiller par code PIN'} onClick={() => setPinSetup(true)} />
+          ) : (
+            <div className="p-4 rounded-xl bg-white dark:bg-[#132238] space-y-2">
+              <input
+                value={newPin}
+                onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                placeholder="Nouveau code à 4 chiffres"
+                inputMode="numeric"
+                className="w-full px-3 py-2.5 rounded-lg border border-[#14213D]/20 dark:border-[#C9A227]/30 bg-transparent outline-none"
+              />
+              <div className="flex gap-2">
+                {pin && <GhostButton onClick={() => { onRemovePin(); setPinSetup(false) }}>Retirer le PIN</GhostButton>}
+                <PrimaryButton onClick={() => { if (newPin.length === 4) { onSetPin(newPin); setPinSetup(false); setNewPin('') } }} disabled={newPin.length !== 4}>
+                  Valider
+                </PrimaryButton>
+              </div>
+            </div>
+          )}
+
+          <Row icon={Home} label="Retour à l'écran d'accueil" onClick={onGoWelcome} />
+          <Row icon={Trash2} label="Supprimer cette classe" onClick={onDeleteClass} danger />
+        </div>
+        <div className="p-4 text-center text-xs opacity-40">{APP_NAME} v{APP_VERSION}</div>
+      </div>
+    </div>
+  )
+}
+
+/* ============================================================================
+   PARCOURS INITIAL D'UNE CLASSE NEUVE
+   ========================================================================== */
+
+function WelcomeScreen({ onStart }) {
+  return (
+    <Screen>
+      <div className="min-h-screen flex flex-col items-center justify-center px-6 text-center">
+        <div className="w-20 h-20 rounded-3xl bg-[#14213D] dark:bg-[#C9A227] flex items-center justify-center mb-6">
+          <span className="text-white dark:text-[#0B1729] font-bold text-2xl">NE</span>
+        </div>
+        <h1 className="text-2xl font-bold mb-2">{APP_NAME}</h1>
+        <p className="opacity-60 mb-10 max-w-xs">Saisissez les notes de votre classe rapidement, calculez moyennes et rangs, exportez au format EducMaster.</p>
+        <div className="w-full max-w-xs">
+          <PrimaryButton onClick={onStart}>Commencer</PrimaryButton>
+        </div>
+      </div>
+    </Screen>
+  )
+}
+
+function ImportScreen({ onImported }) {
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const fileRef = useRef(null)
+
+  async function handleFile(file) {
+    setError('')
+    setLoading(true)
+    try {
+      const buf = await file.arrayBuffer()
+      const { roster, subjects } = parseEducMasterWorkbook(buf)
+      onImported({ roster, subjects })
+    } catch (e) {
+      setError(e.message || "Impossible de lire ce fichier. Vérifiez qu'il s'agit bien d'un export EducMaster.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Screen>
+      <TopBar title="Importer la classe" />
+      <div className="p-6 flex flex-col items-center text-center pt-14">
+        <Upload size={40} className="mb-4 text-[#C9A227]" />
+        <h2 className="font-semibold text-lg mb-2">Fichier Excel EducMaster</h2>
+        <p className="text-sm opacity-60 mb-8 max-w-xs">Déposez le fichier exporté depuis EducMaster (colonnes Matricule, Nom, Prénoms puis les matières).</p>
+
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => e.target.files[0] && handleFile(e.target.files[0])} />
+        <div className="w-full max-w-xs space-y-3">
+          <PrimaryButton onClick={() => fileRef.current?.click()} disabled={loading}>
+            {loading ? 'Lecture en cours…' : 'Choisir un fichier'}
+          </PrimaryButton>
+        </div>
+        {error && (
+          <div className="mt-5 p-3.5 rounded-xl bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-300 text-sm flex items-start gap-2 max-w-xs text-left">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            {error}
           </div>
         )}
-        <div className="divide-y" style={{ borderColor: T.line }}>
-          {stats.map((s) => (
-            <div key={s.key} className="p-4">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-sm font-medium">{s.label}</span>
-                <span className="text-xs" style={{ color: T.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
-                  {s.count}/{presentRoster.length} saisies
-                </span>
+      </div>
+    </Screen>
+  )
+}
+
+function EvaluationPicker({ onPick }) {
+  return (
+    <Screen>
+      <TopBar title="Type d'évaluation" />
+      <div className="p-5 space-y-2.5 pt-8">
+        {EVALUATION_TYPES.map((ev) => (
+          <button
+            key={ev}
+            onClick={() => onPick(ev)}
+            className="w-full p-4 rounded-2xl bg-white dark:bg-[#132238] text-left flex items-center justify-between shadow-sm active:scale-[0.99] transition"
+          >
+            <span className="font-medium text-sm">{ev}</span>
+            <ChevronRight size={18} className="opacity-40" />
+          </button>
+        ))}
+      </div>
+    </Screen>
+  )
+}
+
+function EntryModePicker({ onPick }) {
+  return (
+    <Screen>
+      <TopBar title="Mode de saisie" />
+      <div className="p-5 pt-8 space-y-3">
+        <p className="text-sm opacity-60 px-1 mb-2">Comment souhaitez-vous saisir les notes ? Vous pourrez changer à tout moment.</p>
+        <button onClick={() => onPick('eleve')} className="w-full p-5 rounded-2xl bg-white dark:bg-[#132238] text-left shadow-sm active:scale-[0.99] transition flex items-center gap-4">
+          <Users size={26} className="text-[#C9A227]" />
+          <div>
+            <div className="font-semibold">Par élève</div>
+            <div className="text-xs opacity-60">Un élève à la fois, toutes ses matières</div>
+          </div>
+        </button>
+        <button onClick={() => onPick('matiere')} className="w-full p-5 rounded-2xl bg-white dark:bg-[#132238] text-left shadow-sm active:scale-[0.99] transition flex items-center gap-4">
+          <BookOpen size={26} className="text-[#C9A227]" />
+          <div>
+            <div className="font-semibold">Par matière</div>
+            <div className="text-xs opacity-60">Une matière à la fois, tous les élèves</div>
+          </div>
+        </button>
+      </div>
+    </Screen>
+  )
+}
+
+/* ============================================================================
+   SAISIE PAR ÉLÈVE
+   ========================================================================== */
+
+function StudentEntryTab({ klass, onSetGrade, onToggleAttendance }) {
+  const { roster, subjects, grades, attendance } = klass
+  const [index, setIndex] = useState(0)
+  const student = roster[index]
+  const inputRefs = useRef({})
+
+  if (!student) return <EmptyState icon={Users} title="Aucun élève" />
+
+  const isAbsent = attendance?.[student.matricule] === false
+
+  function handleChange(subjKey, raw) {
+    onSetGrade(student.matricule, subjKey, raw)
+    if (isCodeComplete(raw)) {
+      const currentIdx = subjects.findIndex((s) => s.key === subjKey)
+      const next = subjects[currentIdx + 1]
+      if (next) {
+        setTimeout(() => inputRefs.current[next.key]?.focus(), 30)
+      }
+      if (navigator.vibrate) navigator.vibrate(15)
+    }
+  }
+
+  return (
+    <div className="pb-28">
+      <div className="px-4 pt-4 pb-2 flex items-center justify-between">
+        <button onClick={() => setIndex(Math.max(0, index - 1))} disabled={index === 0} className="p-2 disabled:opacity-30"><ChevronLeft size={20} /></button>
+        <div className="text-center min-w-0 flex-1">
+          <div className="font-semibold truncate">{student.nom} {student.prenoms}</div>
+          <div className="text-xs opacity-50">{index + 1} / {roster.length} · Matricule {student.matricule}</div>
+        </div>
+        <button onClick={() => setIndex(Math.min(roster.length - 1, index + 1))} disabled={index === roster.length - 1} className="p-2 disabled:opacity-30"><ChevronRight size={20} /></button>
+      </div>
+
+      <div className="px-4 pb-3">
+        <button
+          onClick={() => onToggleAttendance(student.matricule)}
+          className={`w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 ${isAbsent ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300' : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'}`}
+        >
+          {isAbsent ? <CircleX size={16} /> : <CircleCheck size={16} />}
+          {isAbsent ? 'Élève absent' : 'Élève présent'}
+        </button>
+      </div>
+
+      {isAbsent ? (
+        <EmptyState icon={CircleX} title="Élève marqué absent" hint="Aucune note à saisir pour cette évaluation." />
+      ) : (
+        <div className="px-4 space-y-2.5">
+          {subjects.map((s) => {
+            const g = grades?.[student.matricule]?.[s.key]
+            return (
+              <div key={s.key} className="p-3.5 rounded-2xl bg-white dark:bg-[#132238] flex items-center justify-between gap-3">
+                <span className="text-sm font-medium flex-1 min-w-0 truncate">{s.label}</span>
+                <input
+                  ref={(el) => (inputRefs.current[s.key] = el)}
+                  value={g?.rawCode ?? ''}
+                  onChange={(e) => handleChange(s.key, e.target.value)}
+                  placeholder="12 2"
+                  inputMode="decimal"
+                  className="w-24 text-center px-2 py-2 rounded-lg border border-[#14213D]/15 dark:border-[#C9A227]/25 bg-transparent outline-none focus:ring-2 focus:ring-[#C9A227] font-mono"
+                />
               </div>
-              {s.average === null ? (
-                <p className="text-xs" style={{ color: T.inkSoft }}>Aucune note saisie pour l'instant.</p>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ============================================================================
+   LISTE DES ÉLÈVES
+   ========================================================================== */
+
+function ElevesTab({ klass, onToggleAttendance, onRemoveStudent }) {
+  const { roster, subjects, grades, attendance } = klass
+  const ranking = useMemo(() => computeRanking(roster, subjects, grades, attendance), [roster, subjects, grades, attendance])
+  const byMatricule = useMemo(() => Object.fromEntries(ranking.map((r) => [r.matricule, r])), [ranking])
+
+  if (!roster.length) return <EmptyState icon={Users} title="Aucun élève importé" />
+
+  return (
+    <div className="px-4 pt-4 pb-28 space-y-2">
+      {roster.map((student) => {
+        const r = byMatricule[student.matricule]
+        const isAbsent = attendance?.[student.matricule] === false
+        return (
+          <div key={student.matricule} className="p-3.5 rounded-2xl bg-white dark:bg-[#132238] flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-sm truncate">{student.nom} {student.prenoms}</div>
+              <div className="text-xs opacity-50 truncate">Matricule {student.matricule}</div>
+            </div>
+            <div className="text-right shrink-0">
+              {isAbsent ? (
+                <span className="text-xs font-medium text-red-500">Absent</span>
               ) : (
-                <>
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: T.goldLine }}>
-                      <div
-                        className="h-full rounded-full"
-                        style={{ width: `${Math.min(100, (s.average / 20) * 100)}%`, background: s.average >= SUBJECT_PASS ? T.green : T.red }}
-                      />
-                    </div>
-                    <span
-                      className="text-xs font-semibold whitespace-nowrap"
-                      style={{ color: s.average >= SUBJECT_PASS ? T.green : T.red, fontFamily: "'IBM Plex Mono', monospace" }}
-                    >
-                      {s.average.toFixed(2)}/20
-                    </span>
-                  </div>
-                  <p className="text-xs" style={{ color: T.inkSoft }}>
-                    Taux de réussite (≥ {SUBJECT_PASS}/20) : <strong>{s.passRate}%</strong>
-                  </p>
-                </>
+                <span className="text-sm font-semibold">{r?.average !== null && r?.average !== undefined ? `${formatNum(r.average)}/20` : '—'}</span>
               )}
             </div>
-          ))}
-          {stats.length === 0 && (
-            <p className="p-4 text-sm text-center" style={{ color: T.inkSoft }}>Aucune matière à afficher.</p>
-          )}
+            <button onClick={() => onToggleAttendance(student.matricule)} className="p-2 shrink-0">
+              {isAbsent ? <CircleX size={17} className="text-red-500" /> : <CircleCheck size={17} className="text-green-600" />}
+            </button>
+            <button onClick={() => onRemoveStudent(student.matricule)} className="p-2 shrink-0 opacity-50">
+              <Trash2 size={16} />
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ============================================================================
+   SAISIE PAR MATIÈRE
+   ========================================================================== */
+
+function SubjectTab({ klass, onSetGrade }) {
+  const { roster, subjects, grades, attendance } = klass
+  const [subjIndex, setSubjIndex] = useState(0)
+  const subject = subjects[subjIndex]
+  const inputRefs = useRef({})
+
+  if (!subject) return <EmptyState icon={BookOpen} title="Aucune matière" />
+
+  function handleChange(matricule, raw, idx) {
+    onSetGrade(matricule, subject.key, raw)
+    if (isCodeComplete(raw)) {
+      const nextStudent = roster[idx + 1]
+      if (nextStudent) setTimeout(() => inputRefs.current[nextStudent.matricule]?.focus(), 30)
+      if (navigator.vibrate) navigator.vibrate(15)
+    }
+  }
+
+  return (
+    <div className="pb-28">
+      <div className="px-4 pt-4 pb-3 flex items-center justify-between">
+        <button onClick={() => setSubjIndex(Math.max(0, subjIndex - 1))} disabled={subjIndex === 0} className="p-2 disabled:opacity-30"><ChevronLeft size={20} /></button>
+        <div className="text-center min-w-0 flex-1">
+          <div className="font-semibold truncate">{subject.label}</div>
+          <div className="text-xs opacity-50">{subjIndex + 1} / {subjects.length}</div>
         </div>
+        <button onClick={() => setSubjIndex(Math.min(subjects.length - 1, subjIndex + 1))} disabled={subjIndex === subjects.length - 1} className="p-2 disabled:opacity-30"><ChevronRight size={20} /></button>
+      </div>
+
+      <div className="px-4 space-y-2.5">
+        {roster.map((student, idx) => {
+          const isAbsent = attendance?.[student.matricule] === false
+          const g = grades?.[student.matricule]?.[subject.key]
+          return (
+            <div key={student.matricule} className={`p-3.5 rounded-2xl bg-white dark:bg-[#132238] flex items-center justify-between gap-3 ${isAbsent ? 'opacity-40' : ''}`}>
+              <span className="text-sm font-medium flex-1 min-w-0 truncate">{student.nom} {student.prenoms}</span>
+              <input
+                ref={(el) => (inputRefs.current[student.matricule] = el)}
+                value={g?.rawCode ?? ''}
+                onChange={(e) => handleChange(student.matricule, e.target.value, idx)}
+                placeholder="12 2"
+                inputMode="decimal"
+                disabled={isAbsent}
+                className="w-24 text-center px-2 py-2 rounded-lg border border-[#14213D]/15 dark:border-[#C9A227]/25 bg-transparent outline-none focus:ring-2 focus:ring-[#C9A227] font-mono disabled:bg-black/5"
+              />
+            </div>
+          )
+        })}
       </div>
     </div>
-  );
+  )
+}
+
+/* ============================================================================
+   CLASSEMENT
+   ========================================================================== */
+
+function RecapTab({ klass, onExport }) {
+  const { roster, subjects, grades, attendance } = klass
+  const ranking = useMemo(() => computeRanking(roster, subjects, grades, attendance), [roster, subjects, grades, attendance])
+  const admisCount = ranking.filter((r) => r.decision === 'Admis').length
+  const notesCount = ranking.filter((r) => !r.isAbsent).length
+
+  if (!roster.length) return <EmptyState icon={Trophy} title="Aucun élève à classer" />
+
+  return (
+    <div className="px-4 pt-4 pb-28 space-y-3">
+      <div className="p-4 rounded-2xl bg-[#14213D] dark:bg-[#C9A227] text-white dark:text-[#0B1729] flex items-center justify-between">
+        <div>
+          <div className="text-xs opacity-80">Résumé de la classe</div>
+          <div className="font-semibold">{admisCount} admis sur {notesCount}</div>
+        </div>
+        <button onClick={onExport} className="p-2.5 rounded-xl bg-white/15 dark:bg-black/10 active:scale-95 transition">
+          <Download size={18} />
+        </button>
+      </div>
+
+      {ranking.map((r) => (
+        <div key={r.matricule} className="p-3.5 rounded-2xl bg-white dark:bg-[#132238] flex items-center gap-3">
+          <div className="w-9 h-9 rounded-full bg-[#14213D]/5 dark:bg-white/5 flex items-center justify-center text-xs font-semibold shrink-0">
+            {r.isAbsent ? '—' : r.rank}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-sm truncate">{r.nom} {r.prenoms}</div>
+            {!r.isAbsent && (
+              <div className={`text-xs font-medium ${r.decision === 'Admis' ? 'text-green-600' : 'text-red-500'}`}>{r.decision}</div>
+            )}
+          </div>
+          <div className="text-right shrink-0">
+            {r.isAbsent ? (
+              <span className="text-xs font-medium text-red-500">Absent</span>
+            ) : (
+              <span className="font-semibold text-sm">{formatNum(r.average)}/20</span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/* ============================================================================
+   STATISTIQUES PAR MATIÈRE
+   ========================================================================== */
+
+function StatsTab({ klass, onClose }) {
+  const { roster, subjects, grades, attendance } = klass
+  const stats = useMemo(() => computeSubjectStats(roster, subjects, grades, attendance), [roster, subjects, grades, attendance])
+
+  return (
+    <Screen>
+      <TopBar title="Statistiques par matière" onBack={onClose} />
+      <div className="px-4 pt-4 pb-10 space-y-2.5">
+        {stats.map((s) => (
+          <div key={s.key} className="p-4 rounded-2xl bg-white dark:bg-[#132238]">
+            <div className="font-medium text-sm mb-2">{s.label}</div>
+            <div className="flex items-center justify-between text-xs opacity-60 mb-1">
+              <span>Moyenne classe</span>
+              <span className="font-semibold text-[#14213D] dark:text-[#C9A227] text-sm">{s.average !== null ? `${formatNum(s.average)}/20` : '—'}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs opacity-60">
+              <span>Taux de réussite (≥ {SUBJECT_PASS}/20)</span>
+              <span className="font-semibold text-sm">{s.successRate !== null ? `${Math.round(s.successRate)}%` : '—'}</span>
+            </div>
+            <div className="mt-2 h-1.5 rounded-full bg-black/5 dark:bg-white/10 overflow-hidden">
+              <div className="h-full bg-[#C9A227]" style={{ width: `${s.successRate ?? 0}%` }} />
+            </div>
+          </div>
+        ))}
+        {stats.length === 0 && <EmptyState icon={BarChart3} title="Aucune matière" />}
+      </div>
+    </Screen>
+  )
+}
+
+/* ============================================================================
+   COMPOSANT RACINE
+   ========================================================================== */
+
+export default function App() {
+  const [licenseStatus, setLicenseStatus] = useState('checking') // checking | locked | unlocked
+  const [license, setLicense] = useState(null)
+  const [bannerDismissed, setBannerDismissed] = useState(false)
+
+  const [classes, setClasses] = useState([])
+  const [activeId, setActiveId] = useState(null)
+  const [dark, setDark] = useState(false)
+  const [pin, setPin] = useState(null)
+  const [pinLocked, setPinLocked] = useState(false)
+  const [defaultMode, setDefaultMode] = useState('eleve')
+
+  const [activeTab, setActiveTab] = useState('eleves')
+  const [classSwitcherOpen, setClassSwitcherOpen] = useState(false)
+  const [morePanelOpen, setMorePanelOpen] = useState(false)
+  const [reorderOpen, setReorderOpen] = useState(false)
+  const [statsOpen, setStatsOpen] = useState(false)
+  const [undoStack, setUndoStack] = useState([])
+
+  // --- Initialisation ---
+  useEffect(() => {
+    const stored = loadStoredLicense()
+    if (stored?.valid) {
+      setLicense(stored)
+      setLicenseStatus('unlocked')
+    } else {
+      setLicenseStatus('locked')
+    }
+
+    setClasses(loadClasses())
+    setActiveId(localStorage.getItem(LS_ACTIVE) || null)
+    setDark(localStorage.getItem(LS_DARK) === '1')
+    setPin(localStorage.getItem(LS_PIN) || null)
+    setPinLocked(!!localStorage.getItem(LS_PIN))
+    setDefaultMode(localStorage.getItem(LS_DEFAULT_MODE) || 'eleve')
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', dark)
+  }, [dark])
+
+  useEffect(() => {
+    if (classes.length) saveClasses(classes)
+  }, [classes])
+
+  useEffect(() => {
+    if (activeId) localStorage.setItem(LS_ACTIVE, activeId)
+  }, [activeId])
+
+  const activeClass = useMemo(() => classes.find((c) => c.id === activeId) || null, [classes, activeId])
+
+  function updateClass(id, updater) {
+    setClasses((prev) => prev.map((c) => (c.id === id ? updater(c) : c)))
+  }
+
+  function pushUndo(matricule, subjKey, prevGrade) {
+    setUndoStack((prev) => [...prev.slice(-19), { classId: activeId, matricule, subjKey, prevGrade }])
+  }
+
+  function handleSetGrade(matricule, subjKey, rawCode) {
+    if (!activeClass) return
+    const prevGrade = activeClass.grades?.[matricule]?.[subjKey] || null
+    pushUndo(matricule, subjKey, prevGrade)
+    const parsed = parseCode(rawCode)
+    updateClass(activeClass.id, (c) => ({
+      ...c,
+      grades: {
+        ...c.grades,
+        [matricule]: {
+          ...c.grades?.[matricule],
+          [subjKey]: {
+            rawCode,
+            obtenue: parsed && !Number.isNaN(parsed.obtenue) ? parsed.obtenue : null,
+            perfectionnement: parsed && parsed.perfectionnement !== null && !Number.isNaN(parsed.perfectionnement) ? parsed.perfectionnement : null,
+          },
+        },
+      },
+      updatedAt: Date.now(),
+    }))
+  }
+
+  function handleUndo() {
+    const last = undoStack[undoStack.length - 1]
+    if (!last) return
+    setUndoStack((prev) => prev.slice(0, -1))
+    updateClass(last.classId, (c) => ({
+      ...c,
+      grades: {
+        ...c.grades,
+        [last.matricule]: {
+          ...c.grades?.[last.matricule],
+          [last.subjKey]: last.prevGrade,
+        },
+      },
+    }))
+  }
+
+  function handleToggleAttendance(matricule) {
+    if (!activeClass) return
+    updateClass(activeClass.id, (c) => {
+      const wasAbsent = c.attendance?.[matricule] === false
+      const nextAttendance = { ...c.attendance }
+      if (wasAbsent) delete nextAttendance[matricule]
+      else nextAttendance[matricule] = false
+      return { ...c, attendance: nextAttendance }
+    })
+  }
+
+  function handleRemoveStudent(matricule) {
+    if (!activeClass) return
+    updateClass(activeClass.id, (c) => ({ ...c, roster: c.roster.filter((s) => s.matricule !== matricule) }))
+  }
+
+  function handleCreateClass(name) {
+    const newClass = {
+      id: uid('cls'),
+      className: name,
+      evaluationType: null,
+      entryModeChosen: false,
+      roster: [],
+      subjects: [],
+      grades: {},
+      attendance: {},
+      updatedAt: Date.now(),
+    }
+    setClasses((prev) => [...prev, newClass])
+    setActiveId(newClass.id)
+    setClassSwitcherOpen(false)
+  }
+
+  function handleDeleteClass(id) {
+    setClasses((prev) => {
+      const next = prev.filter((c) => c.id !== id)
+      if (id === activeId) setActiveId(next[0]?.id || null)
+      return next
+    })
+  }
+
+  function handleSetPin(newPin) {
+    localStorage.setItem(LS_PIN, newPin)
+    setPin(newPin)
+  }
+
+  function handleRemovePin() {
+    localStorage.removeItem(LS_PIN)
+    setPin(null)
+  }
+
+  function handleSetDefaultMode(mode) {
+    localStorage.setItem(LS_DEFAULT_MODE, mode)
+    setDefaultMode(mode)
+  }
+
+  function handleReorderSubjects(newSubjects) {
+    if (!activeClass) return
+    updateClass(activeClass.id, (c) => ({ ...c, subjects: newSubjects }))
+  }
+
+  function handleGoWelcome() {
+    if (!activeClass) return
+    updateClass(activeClass.id, (c) => ({ ...c, entryModeChosen: false, evaluationType: null, roster: [], subjects: [], grades: {}, attendance: {} }))
+    setMorePanelOpen(false)
+  }
+
+  /* ------------------------- Rendus conditionnels ------------------------- */
+
+  if (licenseStatus === 'checking') return null
+
+  if (licenseStatus === 'locked') {
+    return (
+      <LicenseGate
+        onActivated={(result) => {
+          setLicense(result)
+          setLicenseStatus('unlocked')
+        }}
+      />
+    )
+  }
+
+  if (pinLocked) {
+    return <PinLockScreen pin={pin} onUnlock={() => setPinLocked(false)} />
+  }
+
+  // Aucune classe encore créée
+  if (!activeClass) {
+    return (
+      <Screen>
+        <WelcomeScreen onStart={() => handleCreateClass('Ma classe')} />
+      </Screen>
+    )
+  }
+
+  // Parcours de configuration initiale d'une classe neuve
+  if (!activeClass.roster.length) {
+    return (
+      <ImportScreen
+        onImported={({ roster, subjects }) => updateClass(activeClass.id, (c) => ({ ...c, roster, subjects }))}
+      />
+    )
+  }
+  if (!activeClass.evaluationType) {
+    return (
+      <EvaluationPicker
+        onPick={(ev) => updateClass(activeClass.id, (c) => ({ ...c, evaluationType: ev }))}
+      />
+    )
+  }
+  if (!activeClass.entryModeChosen) {
+    return (
+      <EntryModePicker
+        onPick={(mode) => {
+          setActiveTab(mode === 'eleve' ? 'saisie' : 'matieres')
+          updateClass(activeClass.id, (c) => ({ ...c, entryModeChosen: true }))
+        }}
+      />
+    )
+  }
+
+  if (statsOpen) {
+    return <StatsTab klass={activeClass} onClose={() => setStatsOpen(false)} />
+  }
+
+  return (
+    <Screen>
+      <TopBar
+        title={activeClass.className}
+        subtitle={activeClass.evaluationType}
+        right={
+          <button onClick={() => setClassSwitcherOpen(true)} className="p-1.5 -mr-1.5 rounded-lg active:bg-white/10">
+            <Layers size={19} />
+          </button>
+        }
+      />
+      <LicenseExpiryBanner license={license} onDismiss={() => setBannerDismissed(true)} />
+
+      {activeTab === 'eleves' && (
+        <ElevesTab klass={activeClass} onToggleAttendance={handleToggleAttendance} onRemoveStudent={handleRemoveStudent} />
+      )}
+      {activeTab === 'saisie' && (
+        <StudentEntryTab klass={activeClass} onSetGrade={handleSetGrade} onToggleAttendance={handleToggleAttendance} />
+      )}
+      {activeTab === 'matieres' && (
+        <SubjectTab klass={activeClass} onSetGrade={handleSetGrade} />
+      )}
+      {activeTab === 'classement' && (
+        <RecapTab klass={activeClass} onExport={() => buildExportWorkbook(activeClass)} />
+      )}
+
+      <BottomNav active={activeTab} onChange={setActiveTab} onMore={() => setMorePanelOpen(true)} />
+
+      {classSwitcherOpen && (
+        <ClassSwitcher
+          classes={classes}
+          activeId={activeId}
+          onSelect={(id) => { setActiveId(id); setClassSwitcherOpen(false) }}
+          onCreate={handleCreateClass}
+          onDelete={handleDeleteClass}
+          onClose={() => setClassSwitcherOpen(false)}
+        />
+      )}
+
+      {reorderOpen && (
+        <ReorderPanel subjects={activeClass.subjects} onReorder={handleReorderSubjects} onClose={() => setReorderOpen(false)} />
+      )}
+
+      {morePanelOpen && (
+        <MorePanel
+          onClose={() => setMorePanelOpen(false)}
+          onSwitchClass={() => { setMorePanelOpen(false); setClassSwitcherOpen(true) }}
+          onReorder={() => { setMorePanelOpen(false); setReorderOpen(true) }}
+          onStats={() => { setMorePanelOpen(false); setStatsOpen(true) }}
+          dark={dark}
+          onToggleDark={() => { setDark(!dark); localStorage.setItem(LS_DARK, !dark ? '1' : '0') }}
+          pin={pin}
+          onSetPin={handleSetPin}
+          onRemovePin={handleRemovePin}
+          onUndo={handleUndo}
+          canUndo={undoStack.length > 0}
+          onDeleteClass={() => { handleDeleteClass(activeClass.id); setMorePanelOpen(false) }}
+          defaultMode={defaultMode}
+          onSetDefaultMode={handleSetDefaultMode}
+          onGoWelcome={handleGoWelcome}
+        />
+      )}
+    </Screen>
+  )
 }
